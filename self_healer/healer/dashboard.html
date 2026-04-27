@@ -1,0 +1,452 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>Self-Healer · Dashboard</title>
+<link href="https://fonts.googleapis.com/css2?family=Share+Tech+Mono&family=DM+Sans:wght@300;400;500&display=swap" rel="stylesheet"/>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
+<style>
+  :root {
+    --bg:       #0b0e14;
+    --panel:    #111520;
+    --border:   #1e2535;
+    --accent:   #00e5ff;
+    --warn:     #ffb300;
+    --danger:   #ff3d57;
+    --ok:       #00e676;
+    --muted:    #4a5568;
+    --text:     #c9d1e0;
+    --mono:     'Share Tech Mono', monospace;
+    --sans:     'DM Sans', sans-serif;
+  }
+
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: var(--sans);
+    min-height: 100vh;
+    overflow-x: hidden;
+  }
+
+  body::before {
+    content: '';
+    position: fixed; inset: 0;
+    background: repeating-linear-gradient(
+      0deg, transparent, transparent 2px,
+      rgba(0,0,0,.07) 2px, rgba(0,0,0,.07) 4px
+    );
+    pointer-events: none;
+    z-index: 9999;
+  }
+
+  header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 18px 32px;
+    border-bottom: 1px solid var(--border);
+    background: var(--panel);
+  }
+
+  .logo {
+    font-family: var(--mono);
+    font-size: 1.1rem;
+    color: var(--accent);
+    letter-spacing: .12em;
+    display: flex; align-items: center; gap: 10px;
+  }
+  .logo-dot {
+    width: 8px; height: 8px;
+    border-radius: 50%;
+    background: var(--ok);
+    box-shadow: 0 0 8px var(--ok);
+    animation: pulse 2s infinite;
+  }
+  @keyframes pulse {
+    0%,100% { opacity:1; } 50% { opacity:.3; }
+  }
+
+  .header-stats { display: flex; gap: 32px; }
+  .hstat { text-align: right; }
+  .hstat-val {
+    font-family: var(--mono);
+    font-size: 1.4rem;
+    color: var(--accent);
+  }
+  .hstat-label {
+    font-size: .7rem;
+    color: var(--muted);
+    text-transform: uppercase;
+    letter-spacing: .08em;
+  }
+
+  main { padding: 24px 32px; display: grid; gap: 20px; }
+
+  .cards {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+    gap: 16px;
+  }
+
+  .card {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 18px 20px;
+    position: relative;
+    overflow: hidden;
+    transition: border-color .2s;
+  }
+  .card::before {
+    content: '';
+    position: absolute; top: 0; left: 0; right: 0;
+    height: 2px;
+    background: var(--accent);
+    transform: scaleX(0);
+    transition: transform .3s;
+    transform-origin: left;
+  }
+  .card.healthy::before { background: var(--ok);    transform: scaleX(1); }
+  .card.warning::before { background: var(--warn);  transform: scaleX(1); }
+  .card.critical::before{ background: var(--danger);transform: scaleX(1); }
+
+  .card-label {
+    font-size: .68rem;
+    text-transform: uppercase;
+    letter-spacing: .1em;
+    color: var(--muted);
+    margin-bottom: 8px;
+  }
+  .card-val {
+    font-family: var(--mono);
+    font-size: 1.8rem;
+    color: var(--text);
+    line-height: 1;
+  }
+  .card-val.ok   { color: var(--ok); }
+  .card-val.warn { color: var(--warn); }
+  .card-val.bad  { color: var(--danger); }
+
+  .charts {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 16px;
+  }
+  .chart-panel {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 16px 20px;
+  }
+  .chart-title {
+    font-size: .72rem;
+    text-transform: uppercase;
+    letter-spacing: .1em;
+    color: var(--muted);
+    margin-bottom: 12px;
+  }
+  canvas { max-height: 160px; }
+
+  .log-panel {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    overflow: hidden;
+  }
+  .log-header {
+    padding: 14px 20px;
+    border-bottom: 1px solid var(--border);
+    font-size: .72rem;
+    text-transform: uppercase;
+    letter-spacing: .1em;
+    color: var(--muted);
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+  }
+  .log-badge {
+    background: var(--accent);
+    color: #000;
+    font-family: var(--mono);
+    font-size: .65rem;
+    padding: 2px 8px;
+    border-radius: 20px;
+    font-weight: 700;
+  }
+  #event-log {
+    max-height: 260px;
+    overflow-y: auto;
+    font-family: var(--mono);
+    font-size: .76rem;
+    padding: 12px 0;
+  }
+  #event-log::-webkit-scrollbar { width: 4px; }
+  #event-log::-webkit-scrollbar-thumb {
+    background: var(--border);
+    border-radius: 4px;
+  }
+
+  .log-entry {
+    display: grid;
+    grid-template-columns: 140px 160px 1fr;
+    gap: 12px;
+    padding: 6px 20px;
+    border-bottom: 1px solid rgba(30,37,53,.5);
+    animation: slideIn .25s ease-out;
+    transition: background .15s;
+  }
+  .log-entry:hover { background: rgba(255,255,255,.02); }
+  @keyframes slideIn {
+    from { opacity:0; transform: translateX(-8px); }
+    to   { opacity:1; transform: translateX(0); }
+  }
+  .log-ts  { color: var(--muted); }
+  .log-type.MEMORY_LEAK      { color: var(--danger); }
+  .log-type.HIGH_CPU         { color: var(--warn); }
+  .log-type.HEALTH_CHECK_FAIL{ color: var(--danger); }
+  .log-type.SLOW_RESPONSE    { color: var(--warn); }
+  .log-type.HIGH_ERROR_RATE  { color: var(--warn); }
+  .log-msg {
+    color: var(--text);
+    opacity: .7;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .actions-panel {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    overflow: hidden;
+  }
+  table { width: 100%; border-collapse: collapse; font-size: .78rem; }
+  thead th {
+    padding: 10px 16px;
+    text-align: left;
+    font-size: .66rem;
+    text-transform: uppercase;
+    letter-spacing: .1em;
+    color: var(--muted);
+    border-bottom: 1px solid var(--border);
+  }
+  tbody td {
+    padding: 10px 16px;
+    border-bottom: 1px solid rgba(30,37,53,.4);
+  }
+  tbody tr:last-child td { border-bottom: none; }
+
+  .badge {
+    display: inline-block;
+    padding: 2px 8px;
+    border-radius: 3px;
+    font-family: var(--mono);
+    font-size: .68rem;
+  }
+  .badge-ok  { background:rgba(0,230,118,.12); color:var(--ok);     border:1px solid rgba(0,230,118,.2); }
+  .badge-err { background:rgba(255,61,87,.12);  color:var(--danger); border:1px solid rgba(255,61,87,.2); }
+  .badge-dry { background:rgba(0,229,255,.10);  color:var(--accent); border:1px solid rgba(0,229,255,.2); }
+
+  @media (max-width: 768px) {
+    .charts { grid-template-columns: 1fr; }
+    header  { flex-direction: column; gap: 12px; }
+  }
+</style>
+</head>
+<body>
+
+<header>
+  <div class="logo">
+    <div class="logo-dot"></div>
+    SELF-HEALER / MAPE-K DASHBOARD
+  </div>
+  <div class="header-stats">
+    <div class="hstat">
+      <div class="hstat-val" id="h-incidents">—</div>
+      <div class="hstat-label">Total Incidents</div>
+    </div>
+    <div class="hstat">
+      <div class="hstat-val" id="h-actions">—</div>
+      <div class="hstat-label">Actions Taken</div>
+    </div>
+    <div class="hstat">
+      <div class="hstat-val" id="h-last">—</div>
+      <div class="hstat-label">Last Anomaly</div>
+    </div>
+  </div>
+</header>
+
+<main>
+  <div class="cards" id="cards"></div>
+
+  <div class="charts">
+    <div class="chart-panel">
+      <div class="chart-title">CPU %</div>
+      <canvas id="cpuChart"></canvas>
+    </div>
+    <div class="chart-panel">
+      <div class="chart-title">RAM %</div>
+      <canvas id="ramChart"></canvas>
+    </div>
+  </div>
+
+  <div class="log-panel">
+    <div class="log-header">
+      Live Event Log
+      <span class="log-badge" id="event-count">0</span>
+    </div>
+    <div id="event-log"></div>
+  </div>
+
+  <div class="actions-panel">
+    <div class="log-header">Recent Recovery Actions</div>
+    <table>
+      <thead>
+        <tr>
+          <th>Time</th><th>Target</th><th>Anomaly</th>
+          <th>Action</th><th>Duration</th><th>Result</th>
+        </tr>
+      </thead>
+      <tbody id="actions-table"></tbody>
+    </table>
+  </div>
+</main>
+
+<script>
+const mkChart = (id, color) => new Chart(document.getElementById(id), {
+  type: 'line',
+  data: {
+    labels: [],
+    datasets: [{
+      data: [], borderColor: color,
+      backgroundColor: color + '18',
+      borderWidth: 1.5, fill: true,
+      tension: 0.4, pointRadius: 0,
+    }]
+  },
+  options: {
+    animation: false,
+    plugins: { legend: { display: false } },
+    scales: {
+      x: { display: false },
+      y: {
+        min: 0, max: 100,
+        grid: { color: '#1e2535' },
+        ticks: { color: '#4a5568', font: { family: 'Share Tech Mono', size: 10 } }
+      }
+    }
+  }
+});
+
+const cpuChart = mkChart('cpuChart', '#00e5ff');
+const ramChart = mkChart('ramChart', '#ff3d57');
+const MAX_POINTS = 40;
+
+function pushChart(chart, label, value) {
+  chart.data.labels.push(label);
+  chart.data.datasets[0].data.push(value);
+  if (chart.data.labels.length > MAX_POINTS) {
+    chart.data.labels.shift();
+    chart.data.datasets[0].data.shift();
+  }
+  chart.update('none');
+}
+
+function renderCards(targets) {
+  const container = document.getElementById('cards');
+  container.innerHTML = '';
+  targets.forEach(t => {
+    const ok  = t.health_ok;
+    const cpu = t.cpu_pct?.toFixed(1) ?? '—';
+    const ram = t.ram_pct?.toFixed(1) ?? '—';
+    const ms  = t.response_ms ?? '—';
+    const statusClass = ok === null ? '' : ok ? 'healthy' : 'critical';
+    container.innerHTML += `
+      <div class="card ${statusClass}">
+        <div class="card-label">Health · ${t.target}</div>
+        <div class="card-val ${ok ? 'ok' : ok === null ? '' : 'bad'}">
+          ${ok === null ? '—' : ok ? 'UP' : 'DOWN'}
+        </div>
+      </div>
+      <div class="card">
+        <div class="card-label">CPU %</div>
+        <div class="card-val ${parseFloat(cpu) > 85 ? 'warn' : ''}">${cpu}</div>
+      </div>
+      <div class="card">
+        <div class="card-label">RAM %</div>
+        <div class="card-val ${parseFloat(ram) > 80 ? 'bad' : ''}">${ram}</div>
+      </div>
+      <div class="card">
+        <div class="card-label">Response ms</div>
+        <div class="card-val ${parseInt(ms) > 3000 ? 'warn' : ''}">${ms}</div>
+      </div>
+    `;
+    if (t.cpu_pct !== null) pushChart(cpuChart, new Date().toLocaleTimeString(), t.cpu_pct);
+    if (t.ram_pct !== null) pushChart(ramChart, new Date().toLocaleTimeString(), t.ram_pct);
+  });
+}
+
+let eventCount = 0;
+function addLogEntry(ev) {
+  const log = document.getElementById('event-log');
+  const ts  = new Date(ev.ts).toLocaleTimeString();
+  const row = document.createElement('div');
+  row.className = 'log-entry';
+  row.innerHTML = `
+    <span class="log-ts">${ts}</span>
+    <span class="log-type ${ev.anomaly_type}">${ev.anomaly_type}</span>
+    <span class="log-msg">${ev.target_name} · ${ev.severity} · val=${ev.metric_value?.toFixed(1)}</span>
+  `;
+  log.prepend(row);
+  if (log.children.length > 50) log.lastChild.remove();
+  document.getElementById('event-count').textContent = ++eventCount;
+}
+
+function renderActions(actions) {
+  const tbody = document.getElementById('actions-table');
+  tbody.innerHTML = actions.slice(0, 20).map(a => {
+    const badge = a.dry_run ? 'badge-dry' : a.success ? 'badge-ok' : 'badge-err';
+    const label = a.dry_run ? 'DRY RUN' : a.success ? 'OK' : 'FAIL';
+    const ts    = new Date(a.ts).toLocaleTimeString();
+    return `<tr>
+      <td>${ts}</td>
+      <td>${a.target_name}</td>
+      <td>${a.anomaly_type}</td>
+      <td style="font-family:var(--mono)">${a.action}</td>
+      <td>${a.duration_ms ?? 0} ms</td>
+      <td><span class="badge ${badge}">${label}</span></td>
+    </tr>`;
+  }).join('');
+}
+
+async function fetchStatus() {
+  try {
+    const [s, a] = await Promise.all([fetch('/status'), fetch('/actions')]);
+    const sd = await s.json();
+    const ad = await a.json();
+    renderCards(sd.targets);
+    renderActions(ad.actions);
+    const sm = sd.summary;
+    document.getElementById('h-incidents').textContent = sm.total_incidents ?? 0;
+    document.getElementById('h-actions').textContent   = sm.successful_actions ?? 0;
+    document.getElementById('h-last').textContent      =
+      sm.last_anomaly_ts ? new Date(sm.last_anomaly_ts).toLocaleTimeString() : '—';
+  } catch(e) { console.error('Poll error:', e); }
+}
+
+const evtSource = new EventSource('/stream');
+evtSource.onmessage = (e) => {
+  try {
+    const payload = JSON.parse(e.data);
+    if (payload.type === 'anomaly') addLogEntry(payload.data);
+  } catch(_) {}
+};
+
+fetchStatus();
+setInterval(fetchStatus, 5000);
+</script>
+</body>
+</html>

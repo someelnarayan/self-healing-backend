@@ -1,0 +1,26 @@
+services:
+  bookshop:
+    build: ./bookshop
+    container_name: bookshop
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./logs:/var/log/bookshop
+    restart: unless-stopped
+
+  healer:
+    build: ./self_healer/healer
+    container_name: healer
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./logs:/var/log/bookshop
+      - /var/run/docker.sock:/var/run/docker.sock
+    depends_on:
+      - bookshop
+    environment:
+      - SLACK_WEBHOOK_URL=${SLACK_WEBHOOK_URL:-}
+      - SMTP_HOST=${SMTP_HOST:-}
+      - SMTP_USER=${SMTP_USER:-}
+      - SMTP_PASS=${SMTP_PASS:-}
+    restart: unless-stopped
