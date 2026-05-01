@@ -20,6 +20,13 @@ from typing import Any, Dict, List, Optional
 
 
 class KnowledgeBase:
+    def summary(self):
+        return {
+            "status": "ok",
+            "message": "System running"
+        }
+    
+    
     def __init__(self, db_path: str = "/tmp/knowledge.db"):
         self.db_path = db_path
         self._lock = threading.Lock()
