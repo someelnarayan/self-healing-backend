@@ -1,25 +1,15 @@
-"""
-bookshop/main.py  ·  Target Application (the site being monitored)
-Intentional failure endpoints for testing the healer.
-
-Endpoints:
-  GET /            → homepage
-  GET /health      → returns 200 {"status": "ok"}
-  GET /crash       → kills the process (simulate a crash)
-  GET /slow        → sleeps 10 s (simulate slow response)
-  GET /memory-leak → allocates RAM until OOM (simulate memory leak)
-  GET /orders      → fake order list
-"""
 import logging
 import os
 import sys
 import time
+import json
 from pathlib import Path
 
 import uvicorn
 from fastapi import FastAPI
+from fastapi.responses import StreamingResponse
 
-# ── Logging to file (healer reads this) ───────────────────────────────────────
+# ── Logging ───────────────────────────────────────
 LOG_DIR = Path("/var/log/bookshop")
 LOG_DIR.mkdir(parents=True, exist_ok=True)
 LOG_FILE = LOG_DIR / "app.log"
@@ -36,9 +26,9 @@ logger = logging.getLogger("bookshop")
 
 app = FastAPI(title="Bookshop", version="1.0.0")
 
-# In-memory "leak" bucket
 _leak_bucket = []
 
+# ─────────────────────────────────────────────
 
 @app.get("/")
 def home():
@@ -63,7 +53,7 @@ def orders():
 @app.get("/crash")
 def crash():
     logger.error("CRASH endpoint triggered — forcing process exit")
-    os._exit(1)   # Hard kill — simulates a crash
+    os._exit(1)
 
 
 @app.get("/slow")
@@ -76,11 +66,28 @@ def slow():
 @app.get("/memory-leak")
 def memory_leak():
     global _leak_bucket
-    chunk = " " * (10 * 1024 * 1024)   # 10 MB
+    chunk = " " * (10 * 1024 * 1024)
     _leak_bucket.append(chunk)
     logger.error(f"OOM risk — allocated chunk, total={len(_leak_bucket) * 10} MB")
     return {"allocated_mb": len(_leak_bucket) * 10}
 
 
+def event_stream():
+    while True:
+        data = {
+            "status": "running",
+            "memory_mb": len(_leak_bucket) * 10
+        }
+        yield f"data: {json.dumps(data)}\n\n"
+        time.sleep(2)
+
+
+@app.get("/stream")
+def stream():
+    return StreamingResponse(event_stream(), media_type="text/event-stream")
+
+
+# ─────────────────────────────────────────────
+
 if __name__ == "__main__":
-    uvicorn.run("main:app", host="0.0.0.0", port=8080, reload=False)
+    uvicorn.run("main:app", host="0.0.0.0", port=8080)
