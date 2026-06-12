@@ -9,7 +9,7 @@ services:
     restart: "no"
 
   healer:
-    build: ./self_healer/healer
+    build: ./self_healer
     container_name: healer
     ports:
       - "8000:8000"

@@ -12,10 +12,10 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).parent.parent / "healer"))
 
-from self_healer.healer.analyzer import Analyzer
-from self_healer.healer.config import AppConfig, Thresholds, Rule, Target, Alerting
-from self_healer.healer.knowledge import KnowledgeBase
-from self_healer.healer.monitor import Signal, TargetState
+from self_healer.analyzer import Analyzer
+from self_healer.config import AppConfig, Thresholds, Rule, Target, Alerting
+from self_healer.knowledge import KnowledgeBase
+from self_healer.monitor import Signal, TargetState
 
 
 def _make_config():
