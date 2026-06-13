@@ -1,37 +1,43 @@
 """
-analyzer.py  ·  Analyze (A in MAPE-K)
-Reads the last N signals from the ring buffer.
-Applies sliding-window rules and a decision tree to classify anomalies.
+analyzer.py · Analyze (A in MAPE-K)
 
-Outputs: list[AnomalyEvent]  (empty list = system is healthy)
+Responsibilities:
+- Read recent signals from Monitor
+- Detect anomalies using threshold rules
+- Generate AnomalyEvent objects
+- Persist anomalies into KnowledgeBase
 
-STRICT RULE: Analyzer never calls executor or planner.
-It only reads from Monitor's ring buffer and writes anomalies to KnowledgeBase.
+Analyzer NEVER executes actions.
+Analyzer NEVER restarts services.
 """
+
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass, asdict
+from dataclasses import asdict, dataclass
 from datetime import datetime
-from typing import List, Optional
+from typing import List
 
-from config import AppConfig, Thresholds
+from config import AppConfig
 from knowledge import KnowledgeBase
 from monitor import Monitor, Signal
 
 
-# ── AnomalyEvent ───────────────────────────────────────────────────────────────
+# ------------------------------------------------------------------
+# Anomaly Event
+# ------------------------------------------------------------------
 
 @dataclass
 class AnomalyEvent:
-    anomaly_type: str          # MEMORY_LEAK | HIGH_CPU | HEALTH_CHECK_FAIL | etc.
-    severity: str              # LOW | MEDIUM | HIGH | CRITICAL
+    anomaly_type: str
+    severity: str
     target_name: str
     metric_value: float
     context: dict
     ts: str = ""
 
     def __post_init__(self):
+
         if not self.ts:
             self.ts = datetime.utcnow().isoformat()
 
@@ -39,132 +45,274 @@ class AnomalyEvent:
         return asdict(self)
 
 
-# ── Sliding window helpers ─────────────────────────────────────────────────────
+# ------------------------------------------------------------------
+# Helper Functions
+# ------------------------------------------------------------------
 
-def _all_above(signals: List[Signal], attr: str, threshold: float) -> bool:
-    """True if ALL signals in window have attr > threshold."""
+def _all_above(
+    signals: List[Signal],
+    attr: str,
+    threshold: float,
+) -> bool:
+
     if not signals:
         return False
-    return all(getattr(s, attr) > threshold for s in signals)
+
+    return all(
+        getattr(signal, attr) > threshold
+        for signal in signals
+    )
 
 
-def _any_false(signals: List[Signal], attr: str) -> bool:
-    return any(not getattr(s, attr) for s in signals)
+def _any_false(
+    signals: List[Signal],
+    attr: str,
+) -> bool:
+
+    return any(
+        not getattr(signal, attr)
+        for signal in signals
+    )
 
 
-# ── Analyzer ───────────────────────────────────────────────────────────────────
+# ------------------------------------------------------------------
+# Analyzer
+# ------------------------------------------------------------------
 
 class Analyzer:
-    def __init__(self, config: AppConfig, kb: KnowledgeBase, monitor: Monitor):
+
+    def __init__(
+        self,
+        config: AppConfig,
+        kb: KnowledgeBase,
+        monitor: Monitor,
+    ):
         self.config = config
         self.kb = kb
         self.monitor = monitor
-        self._seen: dict = {}
 
-    def analyze(self, target_name: str) -> List[AnomalyEvent]:
-        """Run all checks for one target. Returns list of anomaly events."""
-        thr = self.config.thresholds
-        w = thr.sliding_window_size
-        state = self.monitor.get_ring(target_name)
-        window = state.last_n(w)
+    def analyze(
+        self,
+        target_name: str,
+    ) -> List[AnomalyEvent]:
 
-        if len(window) < w:
-            return []   # not enough data yet
+        thresholds = self.config.thresholds
+
+        window_size = (
+            thresholds.sliding_window_size
+        )
+
+        state = self.monitor.get_ring(
+            target_name
+        )
+
+        window = state.last_n(
+            window_size
+        )
+
+        if len(window) < window_size:
+
+            print(
+                f"[Analyzer] Waiting for "
+                f"more signals "
+                f"({len(window)}/{window_size})",
+                flush=True,
+            )
+
+            return []
 
         events: List[AnomalyEvent] = []
 
-        # ① Memory leak
-        if _all_above(window, "ram_pct", thr.ram_percent):
-            last = window[-1]
-            ctx = {
-                "ram_pct": last.ram_pct,
-                "health_ok": last.health_ok,
-                "error_count": last.error_count,
-            }
-            # Decision tree: high RAM + health failing → MEMORY_LEAK not traffic spike
-            if not last.health_ok or last.error_count > 0:
-                events.append(AnomalyEvent(
+        # ----------------------------------------------------------
+        # HEALTH CHECK FAILURE
+        # ----------------------------------------------------------
+
+        if _any_false(
+            window,
+            "health_ok",
+        ):
+
+            failed_count = sum(
+                1
+                for signal in window
+                if not signal.health_ok
+            )
+
+            events.append(
+                AnomalyEvent(
+                    anomaly_type="HEALTH_CHECK_FAIL",
+                    severity=(
+                        "CRITICAL"
+                        if failed_count >= window_size
+                        else "HIGH"
+                    ),
+                    target_name=target_name,
+                    metric_value=float(
+                        failed_count
+                    ),
+                    context={
+                        "failed_checks":
+                        failed_count,
+                        "window_size":
+                        window_size,
+                    },
+                )
+            )
+
+        # ----------------------------------------------------------
+        # HIGH CPU
+        # ----------------------------------------------------------
+
+        if _all_above(
+            window,
+            "cpu_pct",
+            thresholds.cpu_percent,
+        ):
+
+            latest = window[-1]
+
+            events.append(
+                AnomalyEvent(
+                    anomaly_type="HIGH_CPU",
+                    severity="HIGH",
+                    target_name=target_name,
+                    metric_value=latest.cpu_pct,
+                    context={
+                        "cpu_pct":
+                        latest.cpu_pct
+                    },
+                )
+            )
+
+        # ----------------------------------------------------------
+        # MEMORY LEAK
+        # ----------------------------------------------------------
+
+        if _all_above(
+            window,
+            "ram_pct",
+            thresholds.ram_percent,
+        ):
+
+            latest = window[-1]
+
+            events.append(
+                AnomalyEvent(
                     anomaly_type="MEMORY_LEAK",
                     severity="HIGH",
                     target_name=target_name,
-                    metric_value=last.ram_pct,
-                    context=ctx,
-                ))
-            else:
-                events.append(AnomalyEvent(
-                    anomaly_type="MEMORY_LEAK",
-                    severity="MEDIUM",
-                    target_name=target_name,
-                    metric_value=last.ram_pct,
-                    context=ctx,
-                ))
-
-        # ② High CPU
-        if _all_above(window, "cpu_pct", thr.cpu_percent):
-            last = window[-1]
-            events.append(AnomalyEvent(
-                anomaly_type="HIGH_CPU",
-                severity="MEDIUM",
-                target_name=target_name,
-                metric_value=last.cpu_pct,
-                context={"cpu_pct": last.cpu_pct},
-            ))
-
-        # ③ Health check failure
-        if _any_false(window, "health_ok"):
-            last = window[-1]
-            fail_count = sum(1 for s in window if not s.health_ok)
-            events.append(AnomalyEvent(
-                anomaly_type="HEALTH_CHECK_FAIL",
-                severity="CRITICAL" if fail_count >= w else "HIGH",
-                target_name=target_name,
-                metric_value=float(fail_count),
-                context={"fail_count": fail_count, "window_size": w},
-            ))
-
-        # ④ Slow response time
-        if _all_above(window, "response_ms", thr.response_time_ms):
-            last = window[-1]
-            events.append(AnomalyEvent(
-                anomaly_type="SLOW_RESPONSE",
-                severity="MEDIUM",
-                target_name=target_name,
-                metric_value=last.response_ms,
-                context={"response_ms": last.response_ms,
-                         "threshold_ms": thr.response_time_ms},
-            ))
-
-        # ⑤ High error rate
-        total_errors = sum(s.error_count for s in window)
-        if total_errors >= thr.error_rate_per_window:
-            events.append(AnomalyEvent(
-                anomaly_type="HIGH_ERROR_RATE",
-                severity="HIGH",
-                target_name=target_name,
-                metric_value=float(total_errors),
-                context={"total_errors_in_window": total_errors},
-            ))
-
-        # Deduplicate — don't fire same anomaly type twice in one cycle
-        unique = self._deduplicate(events)
-
-        # Persist to knowledge base
-        for ev in unique:
-            self.kb.write_anomaly(
-                target_name=ev.target_name,
-                anomaly_type=ev.anomaly_type,
-                severity=ev.severity,
-                metric_value=ev.metric_value,
-                context=json.dumps(ev.context),
+                    metric_value=latest.ram_pct,
+                    context={
+                        "ram_pct":
+                        latest.ram_pct
+                    },
+                )
             )
 
-        return unique
+        # ----------------------------------------------------------
+        # SLOW RESPONSE
+        # ----------------------------------------------------------
 
-    def _deduplicate(self, events: List[AnomalyEvent]) -> List[AnomalyEvent]:
-        unique = []
-        seen_types = set()
-        for ev in events:
-            if ev.anomaly_type not in seen_types:
-                seen_types.add(ev.anomaly_type)
-                unique.append(ev)
-        return unique
+        if _all_above(
+            window,
+            "response_ms",
+            thresholds.response_time_ms,
+        ):
+
+            latest = window[-1]
+
+            events.append(
+                AnomalyEvent(
+                    anomaly_type="SLOW_RESPONSE",
+                    severity="MEDIUM",
+                    target_name=target_name,
+                    metric_value=latest.response_ms,
+                    context={
+                        "response_ms":
+                        latest.response_ms,
+                        "threshold":
+                        thresholds.response_time_ms,
+                    },
+                )
+            )
+
+        # ----------------------------------------------------------
+        # HIGH ERROR RATE
+        # ----------------------------------------------------------
+
+        total_errors = sum(
+            signal.error_count
+            for signal in window
+        )
+
+        if (
+            total_errors >=
+            thresholds.error_rate_per_window
+        ):
+
+            events.append(
+                AnomalyEvent(
+                    anomaly_type="HIGH_ERROR_RATE",
+                    severity="HIGH",
+                    target_name=target_name,
+                    metric_value=float(
+                        total_errors
+                    ),
+                    context={
+                        "total_errors":
+                        total_errors
+                    },
+                )
+            )
+
+        # ----------------------------------------------------------
+        # Deduplicate
+        # ----------------------------------------------------------
+
+        unique_events = []
+
+        seen = set()
+
+        for event in events:
+
+            if event.anomaly_type not in seen:
+
+                seen.add(
+                    event.anomaly_type
+                )
+
+                unique_events.append(
+                    event
+                )
+
+        # ----------------------------------------------------------
+        # Persist anomalies
+        # ----------------------------------------------------------
+
+        for event in unique_events:
+
+            print(
+                f"[Analyzer] Detected "
+                f"{event.anomaly_type}",
+                flush=True,
+            )
+
+            self.kb.write_anomaly(
+                target_name=
+                event.target_name,
+
+                anomaly_type=
+                event.anomaly_type,
+
+                severity=
+                event.severity,
+
+                metric_value=
+                event.metric_value,
+
+                context=json.dumps(
+                    event.context
+                ),
+            )
+
+        return unique_events
