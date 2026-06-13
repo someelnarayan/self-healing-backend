@@ -13,7 +13,7 @@ thresholds:
 
   # Reduced for testing.
   # Original value was 5.
-  sliding_window_size: 2
+  sliding_window_size: 5
 
 rules:
   - anomaly_type: MEMORY_LEAK
