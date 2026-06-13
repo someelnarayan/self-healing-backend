@@ -6,3 +6,4 @@ PyYAML==6.0.1
 docker==7.1.0
 tenacity==8.3.0
 watchdog==4.0.1
+pytest==8.3.5pytest==8.3.5
