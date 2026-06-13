@@ -20,7 +20,7 @@ rules:
     actions:
       - restart_service
       - send_alert
-    cooldown_minutes: 5
+    cooldown_minutes: 2
 
   - anomaly_type: HIGH_CPU
     actions:
