@@ -1,4 +1,3 @@
-
 targets:
   - name: bookshop
     health_url: http://bookshop:8080/health
@@ -11,27 +10,39 @@ thresholds:
   ram_percent: 80.0
   response_time_ms: 3000
   error_rate_per_window: 5
-  sliding_window_size: 5
+
+  # Reduced for testing.
+  # Original value was 5.
+  sliding_window_size: 2
 
 rules:
   - anomaly_type: MEMORY_LEAK
-    actions: [restart_service, send_alert]
+    actions:
+      - restart_service
+      - send_alert
     cooldown_minutes: 5
 
   - anomaly_type: HIGH_CPU
-    actions: [send_alert, restart_service]
+    actions:
+      - send_alert
+      - restart_service
     cooldown_minutes: 10
 
   - anomaly_type: HEALTH_CHECK_FAIL
-    actions: [restart_service, send_alert]
+    actions:
+      - restart_service
+      - send_alert
     cooldown_minutes: 3
 
   - anomaly_type: HIGH_ERROR_RATE
-    actions: [send_alert, retry_http_endpoint]
+    actions:
+      - send_alert
+      - retry_http_endpoint
     cooldown_minutes: 5
 
   - anomaly_type: SLOW_RESPONSE
-    actions: [send_alert]
+    actions:
+      - send_alert
     cooldown_minutes: 10
 
 alerting:

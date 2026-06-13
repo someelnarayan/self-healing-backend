@@ -1,16 +1,14 @@
 """
 planner.py · Plan (P in MAPE-K)
 
-Takes an AnomalyEvent and decides WHAT to do about it.
-
 Responsibilities:
-- Look up matching rule from config.yaml
-- Check cooldown timers
-- Build ActionPlan
-- Escalate if all actions are blocked
+- Convert anomalies into recovery plans
+- Select actions from config.yaml rules
+- Respect cooldowns
 - Support dry-run mode
 
-Does NOT execute actions.
+Planner decides WHAT to do.
+Executor decides HOW to do it.
 """
 
 from __future__ import annotations
@@ -43,32 +41,41 @@ class Planner:
         self.kb = kb
         self.dry_run = dry_run
 
-    def plan(self, anomaly: AnomalyEvent) -> Optional[ActionPlan]:
+    def plan(
+        self,
+        anomaly: AnomalyEvent,
+    ) -> Optional[ActionPlan]:
 
-        rule = self.config.rule_for(anomaly.anomaly_type)
+        rule = self.config.rule_for(
+            anomaly.anomaly_type
+        )
 
         if not rule:
+
             print(
-                f"[Planner] No rule for anomaly type: "
-                f"{anomaly.anomaly_type}"
+                f"[Planner] No rule found for "
+                f"{anomaly.anomaly_type}",
+                flush=True,
             )
+
             return None
 
-        available_actions = []
-        blocked_actions = []
+        target_name = anomaly.target_name
 
-        for action in rule.actions:
+        if self.kb.is_on_cooldown(target_name):
 
-            if self.kb.is_on_cooldown(anomaly.target_name):
-                blocked_actions.append(action)
-            else:
-                available_actions.append(action)
-
-        if not available_actions:
+            remaining = (
+                self.kb.get_cooldown_remaining(
+                    target_name
+                )
+            )
 
             print(
-                f"[Planner] All actions on cooldown for "
-                f"{anomaly.target_name}/{anomaly.anomaly_type}"
+                f"[Planner] Target "
+                f"{target_name} "
+                f"is on cooldown "
+                f"({remaining}s remaining)",
+                flush=True,
             )
 
             return ActionPlan(
@@ -76,13 +83,21 @@ class Planner:
                 actions=["send_alert"],
                 dry_run=self.dry_run,
                 skip_reason=(
-                    f"All actions on cooldown: "
-                    f"{blocked_actions}"
+                    f"Cooldown active "
+                    f"({remaining}s remaining)"
                 ),
             )
 
+        print(
+            f"[Planner] Selected actions "
+            f"{rule.actions} "
+            f"for anomaly "
+            f"{anomaly.anomaly_type}",
+            flush=True,
+        )
+
         return ActionPlan(
             anomaly=anomaly,
-            actions=available_actions,
+            actions=rule.actions,
             dry_run=self.dry_run,
         )
