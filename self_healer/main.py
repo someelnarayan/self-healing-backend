@@ -17,6 +17,7 @@ from executor import Executor
 from knowledge import KnowledgeBase
 from monitor import Monitor
 from planner import Planner
+from fastapi.middleware.cors import CORSMiddleware
 
 
 CONFIG_PATH = Path(__file__).parent / "config.yaml"
@@ -35,6 +36,12 @@ _event_queue: queue.Queue = queue.Queue(maxsize=200)
 app = FastAPI(
     title="Self-Healing Backend System",
     version="1.0.0",
+)
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 
 
