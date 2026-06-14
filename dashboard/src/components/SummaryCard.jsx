@@ -1,11 +1,14 @@
 import { Card, CardContent, Typography } from "@mui/material";
 
-function SummaryCard({ title, value }) {
+export default function SummaryCard({
+  title,
+  value,
+}) {
   return (
     <Card elevation={4}>
       <CardContent>
         <Typography
-          variant="h6"
+          color="text.secondary"
           gutterBottom
         >
           {title}
@@ -13,7 +16,7 @@ function SummaryCard({ title, value }) {
 
         <Typography
           variant="h4"
-          color="primary"
+          fontWeight="bold"
         >
           {value}
         </Typography>
@@ -21,5 +24,3 @@ function SummaryCard({ title, value }) {
     </Card>
   );
 }
-
-export default SummaryCard;
