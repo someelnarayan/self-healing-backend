@@ -166,14 +166,14 @@ export default function Dashboard() {
 
       {/* ── Live Metrics ── */}
       <SectionLabel>Live Metrics</SectionLabel>
-      <Grid container spacing={2}>
-        <Grid item xs={12} md={6}>
-          <MetricChart title="CPU Usage %" data={cpuData} dataKey="value" color="#6366f1" unit="%" />
-        </Grid>
-        <Grid item xs={12} md={6}>
-          <MetricChart title="Response Time (ms)" data={rtData} dataKey="value" color="#f59e0b" unit=" ms" />
-        </Grid>
+      <Grid container spacing={2} sx={{ width: "100%" }}>
+       <Grid item xs={6}>
+        <MetricChart title="CPU Usage %" data={cpuData} dataKey="value" color="#6366f1" unit="%" />
+       </Grid>
+      <Grid item xs={6}>
+        <MetricChart title="Response Time (ms)" data={rtData} dataKey="value" color="#f59e0b" unit=" ms" />
       </Grid>
+    </Grid>
 
       {/* ── Anomaly Table ── */}
       <SectionLabel>Recent Anomalies</SectionLabel>

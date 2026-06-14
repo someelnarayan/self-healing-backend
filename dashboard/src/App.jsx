@@ -30,8 +30,12 @@ export default function App() {
       <CssBaseline />
       <BrowserRouter>
         <Header status={status} />
+
         <Box sx={{ display: "flex", bgcolor: "background.default", minHeight: "100vh" }}>
+
           <Sidebar drawerWidth={DRAWER_W} />
+
+          {/* ✅ THIS is the main content area — full width fix is here */}
           <Box
             component="main"
             sx={{
@@ -39,19 +43,21 @@ export default function App() {
               width: `calc(100% - ${DRAWER_W}px)`,
               minHeight: "100vh",
               bgcolor: "#0f1117",
+              overflow: "hidden",
             }}
           >
             <Toolbar sx={{ minHeight: "64px !important" }} />
             <Box sx={{ p: 4 }}>
               <Routes>
-                <Route path="/" element={<Dashboard />} />
-                <Route path="/signals" element={<PlaceholderPage title="Signals" />} />
+                <Route path="/"          element={<Dashboard />} />
+                <Route path="/signals"   element={<PlaceholderPage title="Signals" />} />
                 <Route path="/anomalies" element={<PlaceholderPage title="Anomalies" />} />
-                <Route path="/recovery" element={<PlaceholderPage title="Recovery" />} />
-                <Route path="/audit" element={<PlaceholderPage title="Audit Log" />} />
+                <Route path="/recovery"  element={<PlaceholderPage title="Recovery" />} />
+                <Route path="/audit"     element={<PlaceholderPage title="Audit Log" />} />
               </Routes>
             </Box>
           </Box>
+
         </Box>
       </BrowserRouter>
     </ThemeProvider>
