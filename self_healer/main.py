@@ -230,3 +230,62 @@ if __name__ == "__main__":
         port=8000,
         reload=True,
     )
+@app.get("/health")
+def healer_health():
+    return {
+        "status": "ok",
+        "service": "self-healer",
+    }
+
+
+@app.get("/status")
+def status():
+    return {
+        "summary": kb.summary(),
+    }
+
+
+# -------------------------------------------------------
+# Dashboard APIs
+# -------------------------------------------------------
+
+@app.get("/signals")
+def signals(limit: int = 100):
+    return kb.get_signals(limit)
+
+
+@app.get("/anomalies")
+def anomalies(limit: int = 100):
+    return kb.get_anomalies(limit)
+
+
+@app.get("/audit")
+def audit(limit: int = 100):
+    return kb.get_audit(limit)
+
+
+# -------------------------------------------------------
+# SSE Stream
+# -------------------------------------------------------
+
+@app.get("/stream")
+async def stream():
+
+    async def event_generator():
+        while True:
+            try:
+                event = _event_queue.get_nowait()
+
+                yield (
+                    f"data: "
+                    f"{json.dumps(event)}\n\n"
+                )
+
+            except queue.Empty:
+                yield ": heartbeat\n\n"
+                await asyncio.sleep(1)
+
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+    )
