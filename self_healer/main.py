@@ -147,6 +147,35 @@ def status():
     }
 
 
+@app.get("/signals")
+def signals(limit: int = 100, target: str | None = None):
+    """
+    Returns recent signal_log entries (newest first).
+    Used by the Signals page and Live Metrics charts.
+    """
+    return kb.get_signals(limit=limit, target_name=target)
+
+
+@app.get("/anomalies")
+def anomalies(limit: int = 100, target: str | None = None):
+    """
+    Returns recent anomaly_log entries (newest first).
+    Used by the Anomalies page and the Anomaly Log table
+    on the dashboard.
+    """
+    return kb.get_anomalies(limit=limit, target_name=target)
+
+
+@app.get("/audit")
+def audit(limit: int = 100, target: str | None = None):
+    """
+    Returns recent audit_log entries (newest first).
+    Used by the Audit Log page and the Recovery Audit Log
+    table on the dashboard.
+    """
+    return kb.get_audit(limit=limit, target_name=target)
+
+
 @app.get("/stream")
 async def stream():
 
@@ -184,6 +213,9 @@ def dashboard():
             <ul>
                 <li><a href="/health">Health</a></li>
                 <li><a href="/status">Status</a></li>
+                <li><a href="/signals">Signals</a></li>
+                <li><a href="/anomalies">Anomalies</a></li>
+                <li><a href="/audit">Audit</a></li>
                 <li><a href="/stream">Event Stream</a></li>
             </ul>
         </body>

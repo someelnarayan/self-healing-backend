@@ -224,6 +224,121 @@ class KnowledgeBase:
                 ),
             )
 
+    # ------------------------------------------------------------
+    # Read methods (used by the FastAPI /signals, /anomalies,
+    # /audit endpoints for the React dashboard)
+    # ------------------------------------------------------------
+
+    def get_signals(
+        self,
+        limit: int = 100,
+        target_name: str | None = None,
+    ):
+
+        query = """
+            SELECT id, ts, target_name, cpu_pct, ram_pct,
+                   response_ms, health_ok, error_count
+            FROM signal_log
+        """
+        params: list = []
+
+        if target_name:
+            query += " WHERE target_name = ?"
+            params.append(target_name)
+
+        query += " ORDER BY id DESC LIMIT ?"
+        params.append(limit)
+
+        with self._lock, self._conn() as conn:
+            rows = conn.execute(query, params).fetchall()
+
+        return [
+            {
+                "id": r[0],
+                "ts": r[1],
+                "target_name": r[2],
+                "cpu_pct": r[3],
+                "ram_pct": r[4],
+                "response_ms": r[5],
+                "health_ok": bool(r[6]),
+                "error_count": r[7],
+            }
+            for r in rows
+        ]
+
+    def get_anomalies(
+        self,
+        limit: int = 100,
+        target_name: str | None = None,
+    ):
+
+        query = """
+            SELECT id, ts, target_name, anomaly_type,
+                   severity, metric_value, context
+            FROM anomaly_log
+        """
+        params: list = []
+
+        if target_name:
+            query += " WHERE target_name = ?"
+            params.append(target_name)
+
+        query += " ORDER BY id DESC LIMIT ?"
+        params.append(limit)
+
+        with self._lock, self._conn() as conn:
+            rows = conn.execute(query, params).fetchall()
+
+        return [
+            {
+                "id": r[0],
+                "ts": r[1],
+                "target_name": r[2],
+                "anomaly_type": r[3],
+                "severity": r[4],
+                "metric_value": r[5],
+                "context": r[6],
+            }
+            for r in rows
+        ]
+
+    def get_audit(
+        self,
+        limit: int = 100,
+        target_name: str | None = None,
+    ):
+
+        query = """
+            SELECT id, ts, target_name, anomaly_type,
+                   action, success, duration_ms, error_msg
+            FROM audit_log
+        """
+        params: list = []
+
+        if target_name:
+            query += " WHERE target_name = ?"
+            params.append(target_name)
+
+        query += " ORDER BY id DESC LIMIT ?"
+        params.append(limit)
+
+        with self._lock, self._conn() as conn:
+            rows = conn.execute(query, params).fetchall()
+
+        return [
+            {
+                "id": r[0],
+                "ts": r[1],
+                "target_name": r[2],
+                "anomaly_type": r[3],
+                "action": r[4],
+                "success": bool(r[5]),
+                "duration_ms": r[6],
+                "error_msg": r[7],
+            }
+            for r in rows
+        ]
+
     def set_cooldown(
         self,
         target_name: str,
