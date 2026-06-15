@@ -37,7 +37,6 @@ class AnomalyEvent:
     ts: str = ""
 
     def __post_init__(self):
-
         if not self.ts:
             self.ts = datetime.utcnow().isoformat()
 
@@ -60,17 +59,6 @@ def _all_above(
 
     return all(
         getattr(signal, attr) > threshold
-        for signal in signals
-    )
-
-
-def _any_false(
-    signals: List[Signal],
-    attr: str,
-) -> bool:
-
-    return any(
-        not getattr(signal, attr)
         for signal in signals
     )
 
@@ -98,9 +86,7 @@ class Analyzer:
 
         thresholds = self.config.thresholds
 
-        window_size = (
-            thresholds.sliding_window_size
-        )
+        window_size = thresholds.sliding_window_size
 
         state = self.monitor.get_ring(
             target_name
@@ -113,8 +99,7 @@ class Analyzer:
         if len(window) < window_size:
 
             print(
-                f"[Analyzer] Waiting for "
-                f"more signals "
+                f"[Analyzer] Waiting for more signals "
                 f"({len(window)}/{window_size})",
                 flush=True,
             )
@@ -125,34 +110,35 @@ class Analyzer:
 
         # ----------------------------------------------------------
         # HEALTH CHECK FAILURE
+        # Require consecutive failures
         # ----------------------------------------------------------
 
-        if _any_false(
-            window,
-            "health_ok",
-        ):
+        consecutive_failures = 0
 
-            failed_count = sum(
-                1
-                for signal in window
-                if not signal.health_ok
-            )
+        for signal in reversed(window):
+
+            if not signal.health_ok:
+                consecutive_failures += 1
+            else:
+                break
+
+        if consecutive_failures >= 2:
 
             events.append(
                 AnomalyEvent(
                     anomaly_type="HEALTH_CHECK_FAIL",
                     severity=(
                         "CRITICAL"
-                        if failed_count >= window_size
+                        if consecutive_failures >= window_size
                         else "HIGH"
                     ),
                     target_name=target_name,
                     metric_value=float(
-                        failed_count
+                        consecutive_failures
                     ),
                     context={
-                        "failed_checks":
-                        failed_count,
+                        "consecutive_failures":
+                        consecutive_failures,
                         "window_size":
                         window_size,
                     },
@@ -270,7 +256,6 @@ class Analyzer:
         # ----------------------------------------------------------
 
         unique_events = []
-
         seen = set()
 
         for event in events:
