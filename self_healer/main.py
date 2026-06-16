@@ -159,21 +159,81 @@ def signals(limit: int = 100, target: str | None = None):
 @app.get("/anomalies")
 def anomalies(limit: int = 100, target: str | None = None):
     """
-    Returns recent anomaly_log entries (newest first).
-    Used by the Anomalies page and the Anomaly Log table
-    on the dashboard.
+    Returns recent anomaly_log entries (newest first), reshaped to
+    match the React AnomalyTable component's expected fields:
+        timestamp, type, service, severity, status
+
+    `status` is derived: an anomaly is "resolved" if at least one
+    audit_log entry exists for the same target + anomaly_type with
+    success = true, otherwise it is "open".
     """
-    return kb.get_anomalies(limit=limit, target_name=target)
+    raw = kb.get_anomalies(limit=limit, target_name=target)
+    audits = kb.get_audit(limit=500)
+
+    resolved_pairs = {
+        (a["target_name"], a["anomaly_type"])
+        for a in audits
+        if a["success"]
+    }
+
+    return [
+        {
+            "id": row["id"],
+            "timestamp": row["ts"],
+            "type": row["anomaly_type"],
+            "service": row["target_name"],
+            "severity": row["severity"],
+            "metric_value": row["metric_value"],
+            "context": row["context"],
+            "status": (
+                "resolved"
+                if (row["target_name"], row["anomaly_type"]) in resolved_pairs
+                else "open"
+            ),
+        }
+        for row in raw
+    ]
 
 
 @app.get("/audit")
 def audit(limit: int = 100, target: str | None = None):
     """
-    Returns recent audit_log entries (newest first).
-    Used by the Audit Log page and the Recovery Audit Log
-    table on the dashboard.
+    Returns recent audit_log entries (newest first), reshaped to
+    match the React AuditTable component's expected fields:
+        timestamp, action, target, result
     """
-    return kb.get_audit(limit=limit, target_name=target)
+    raw = kb.get_audit(limit=limit, target_name=target)
+
+    return [
+        {
+            "id": row["id"],
+            "timestamp": row["ts"],
+            "action": row["action"],
+            "target": row["target_name"],
+            "result": "success" if row["success"] else "failed",
+            "anomaly_type": row["anomaly_type"],
+            "duration_ms": row["duration_ms"],
+            "error_msg": row["error_msg"],
+        }
+        for row in raw
+    ]
+
+
+@app.get("/recovery")
+def recovery():
+    """
+    Returns cooldown status for every configured target.
+    Used by the Recovery page to show which services are
+    currently blocked from re-triggering a recovery action.
+    """
+    return [
+        {
+            "target": t.name,
+            "on_cooldown": kb.is_on_cooldown(t.name),
+            "cooldown_remaining": kb.get_cooldown_remaining(t.name),
+        }
+        for t in config.targets
+    ]
 
 
 @app.get("/stream")
@@ -216,6 +276,7 @@ def dashboard():
                 <li><a href="/signals">Signals</a></li>
                 <li><a href="/anomalies">Anomalies</a></li>
                 <li><a href="/audit">Audit</a></li>
+                <li><a href="/recovery">Recovery</a></li>
                 <li><a href="/stream">Event Stream</a></li>
             </ul>
         </body>
@@ -229,63 +290,4 @@ if __name__ == "__main__":
         host="0.0.0.0",
         port=8000,
         reload=True,
-    )
-@app.get("/health")
-def healer_health():
-    return {
-        "status": "ok",
-        "service": "self-healer",
-    }
-
-
-@app.get("/status")
-def status():
-    return {
-        "summary": kb.summary(),
-    }
-
-
-# -------------------------------------------------------
-# Dashboard APIs
-# -------------------------------------------------------
-
-@app.get("/signals")
-def signals(limit: int = 100):
-    return kb.get_signals(limit)
-
-
-@app.get("/anomalies")
-def anomalies(limit: int = 100):
-    return kb.get_anomalies(limit)
-
-
-@app.get("/audit")
-def audit(limit: int = 100):
-    return kb.get_audit(limit)
-
-
-# -------------------------------------------------------
-# SSE Stream
-# -------------------------------------------------------
-
-@app.get("/stream")
-async def stream():
-
-    async def event_generator():
-        while True:
-            try:
-                event = _event_queue.get_nowait()
-
-                yield (
-                    f"data: "
-                    f"{json.dumps(event)}\n\n"
-                )
-
-            except queue.Empty:
-                yield ": heartbeat\n\n"
-                await asyncio.sleep(1)
-
-    return StreamingResponse(
-        event_generator(),
-        media_type="text/event-stream",
     )

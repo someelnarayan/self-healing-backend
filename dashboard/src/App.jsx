@@ -5,6 +5,10 @@ import theme from "./theme";
 import Header from "./components/Header";
 import Sidebar from "./components/Sidebar";
 import Dashboard from "./pages/Dashboard";
+import SignalsPage from "./pages/SignalsPage";
+import AnomaliesPage from "./pages/AnomaliesPage";
+import AuditPage from "./pages/AuditPage";
+import RecoveryPage from "./pages/RecoveryPage";
 import { useEffect, useState } from "react";
 import { fetchStatus } from "./services/api";
 
@@ -35,7 +39,6 @@ export default function App() {
 
           <Sidebar drawerWidth={DRAWER_W} />
 
-          {/* ✅ THIS is the main content area — full width fix is here */}
           <Box
             component="main"
             sx={{
@@ -50,10 +53,10 @@ export default function App() {
             <Box sx={{ p: 4 }}>
               <Routes>
                 <Route path="/"          element={<Dashboard />} />
-                <Route path="/signals"   element={<PlaceholderPage title="Signals" />} />
-                <Route path="/anomalies" element={<PlaceholderPage title="Anomalies" />} />
-                <Route path="/recovery"  element={<PlaceholderPage title="Recovery" />} />
-                <Route path="/audit"     element={<PlaceholderPage title="Audit Log" />} />
+                <Route path="/signals"   element={<SignalsPage />} />
+                <Route path="/anomalies" element={<AnomaliesPage />} />
+                <Route path="/recovery"  element={<RecoveryPage />} />
+                <Route path="/audit"     element={<AuditPage />} />
               </Routes>
             </Box>
           </Box>
@@ -61,14 +64,5 @@ export default function App() {
         </Box>
       </BrowserRouter>
     </ThemeProvider>
-  );
-}
-
-function PlaceholderPage({ title }) {
-  return (
-    <Box>
-      <Box sx={{ color: "#e2e8f0", fontSize: 22, fontWeight: 700, mb: 1 }}>{title}</Box>
-      <Box sx={{ color: "#475569", fontSize: 14 }}>Connect your FastAPI endpoint to populate this page.</Box>
-    </Box>
   );
 }

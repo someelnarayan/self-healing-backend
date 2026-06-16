@@ -8,7 +8,7 @@ import SummaryCard from "../components/SummaryCard";
 import MetricChart from "../components/MetricChart";
 import AnomalyTable from "../components/AnomalyTable";
 import AuditTable from "../components/AuditTable";
-import { fetchStatus, fetchAnomalies, fetchAudit } from "../services/api";
+import { fetchStatus, fetchAnomalies, fetchAudit, fetchSignals } from "../services/api";
 
 const statusColor = { ok: "#22c55e", degraded: "#f59e0b", down: "#f87171" };
 
@@ -20,11 +20,15 @@ const MAPE = [
   { name: "Knowledge", desc: "SQLite audit store",       color: "#22c55e" },
 ];
 
-function generateMetrics(base, range, count = 14) {
-  return Array.from({ length: count }, (_, i) => ({
-    time: `${i}m`,
-    value: Math.max(0, base + Math.floor((Math.random() - 0.5) * range)),
-  }));
+// signal_log timestamps are stored as datetime.utcnow().isoformat()
+// (no trailing "Z"), so we append it before parsing as UTC.
+function formatTime(ts) {
+  try {
+    const d = new Date(ts.endsWith("Z") ? ts : `${ts}Z`);
+    return d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" });
+  } catch {
+    return ts;
+  }
 }
 
 function SectionLabel({ children }) {
@@ -51,8 +55,8 @@ export default function Dashboard() {
   const [summary, setSummary] = useState({ status: "ok", signals: 0, anomalies: 0, audits: 0 });
   const [anomalies, setAnomalies] = useState([]);
   const [audit, setAudit] = useState([]);
-  const [cpuData, setCpuData] = useState(generateMetrics(45, 30));
-  const [rtData, setRtData] = useState(generateMetrics(130, 80));
+  const [cpuData, setCpuData] = useState([]);
+  const [rtData, setRtData] = useState([]);
   const [lastRefresh, setLastRefresh] = useState(new Date());
 
   const refresh = useCallback(async () => {
@@ -60,10 +64,36 @@ export default function Dashboard() {
       const s = await fetchStatus();
       setSummary(s.summary ?? s);
     } catch {}
-    try { setAnomalies(await fetchAnomalies()); } catch {}
-    try { setAudit(await fetchAudit()); } catch {}
-    setCpuData(generateMetrics(45, 30));
-    setRtData(generateMetrics(130, 80));
+
+    try {
+      setAnomalies(await fetchAnomalies());
+    } catch {}
+
+    try {
+      setAudit(await fetchAudit());
+    } catch {}
+
+    try {
+      // /signals returns newest-first; reverse a recent slice so
+      // the chart reads left-to-right in chronological order.
+      const signals = await fetchSignals(50);
+      const chronological = [...signals].slice(0, 14).reverse();
+
+      setCpuData(
+        chronological.map((r) => ({
+          time: formatTime(r.ts),
+          value: Math.round(r.cpu_pct ?? 0),
+        }))
+      );
+
+      setRtData(
+        chronological.map((r) => ({
+          time: formatTime(r.ts),
+          value: Math.round(r.response_ms ?? 0),
+        }))
+      );
+    } catch {}
+
     setLastRefresh(new Date());
   }, []);
 
