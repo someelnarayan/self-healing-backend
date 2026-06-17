@@ -446,6 +446,17 @@ class Executor:
                 duration_ms=result.duration_ms,
                 error_msg=result.error,
             )
+            if result.success:
+
+                self.kb.resolve_incident(
+                    anomaly.target_name,
+                    anomaly.anomaly_type,
+                )
+
+                self.kb.set_cooldown(
+                    anomaly.target_name,
+                    30,
+                )
 
             results.append(result)
 

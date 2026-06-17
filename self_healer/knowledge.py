@@ -14,6 +14,7 @@ class KnowledgeBase:
 
         self._lock = threading.Lock()
         self._cooldowns = {}
+        self._active_incidents = {}
 
         self.db_path = self._normalize_db_path(db_path)
 
@@ -384,8 +385,54 @@ class KnowledgeBase:
         )
 
         return max(0, remaining)
+    def incident_exists(
+        self,
+        target_name: str,
+        anomaly_type: str,
+    ) -> bool:
+
+        key = (
+            target_name,
+            anomaly_type,
+        )
+
+        return key in self._active_incidents
+
+
+    def create_incident(
+        self,
+        target_name: str,
+        anomaly_type: str,
+    ):
+
+        key = (
+            target_name,
+            anomaly_type,
+        )
+
+        self._active_incidents[key] = {
+            "created_at": time.time()
+        }
+
+
+    def resolve_incident(
+        self,
+        target_name: str,
+        anomaly_type: str,
+    ):
+
+        key = (
+        target_name,
+        anomaly_type,
+        )
+
+        self._active_incidents.pop(
+            key,
+            None,
+    )
 
     @staticmethod
     def _now() -> str:
 
         return datetime.utcnow().isoformat()
+    

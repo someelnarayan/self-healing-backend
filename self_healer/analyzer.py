@@ -13,6 +13,9 @@ Analyzer NEVER restarts services.
 
 from __future__ import annotations
 
+from asyncio import events
+from curses import window
+from curses import window
 import json
 from dataclasses import asdict, dataclass
 from datetime import datetime
@@ -62,6 +65,34 @@ def _all_above(
         for signal in signals
     )
 
+
+def _memory_leak_trend(
+    signals: List[Signal],
+    min_growth: float = 15.0,
+) -> bool:
+
+    if len(signals) < 5:
+        return False
+
+    values = [
+        signal.ram_pct
+        for signal in signals
+    ]
+
+    increasing_steps = sum(
+        1
+        for i in range(1, len(values))
+        if values[i] > values[i - 1]
+    )
+
+    growth = (
+        values[-1] - values[0]
+    )
+
+    return (
+        increasing_steps >= len(values) - 1
+        and growth >= min_growth
+    )
 
 # ------------------------------------------------------------------
 # Analyzer
@@ -171,29 +202,32 @@ class Analyzer:
             )
 
         # ----------------------------------------------------------
-        # MEMORY LEAK
+        # MEMORY LEAK TREND
         # ----------------------------------------------------------
 
-        if _all_above(
-            window,
-            "ram_pct",
-            thresholds.ram_percent,
-        ):
+        if _memory_leak_trend(window):
 
             latest = window[-1]
 
             events.append(
-                AnomalyEvent(
-                    anomaly_type="MEMORY_LEAK",
-                    severity="HIGH",
-                    target_name=target_name,
-                    metric_value=latest.ram_pct,
-                    context={
-                        "ram_pct":
-                        latest.ram_pct
-                    },
-                )
+            AnomalyEvent(
+                anomaly_type="MEMORY_LEAK",
+                severity="HIGH",
+                target_name=target_name,
+                metric_value=latest.ram_pct,
+                context={
+                    "start_ram":
+                    window[0].ram_pct,
+
+                    "end_ram":
+                    latest.ram_pct,
+
+                    "growth":
+                    latest.ram_pct
+                    - window[0].ram_pct,
+                },
             )
+        )
 
         # ----------------------------------------------------------
         # SLOW RESPONSE
@@ -275,6 +309,17 @@ class Analyzer:
         # ----------------------------------------------------------
 
         for event in unique_events:
+
+            if self.kb.incident_exists(
+                event.target_name,
+                event.anomaly_type,
+            ):
+                continue
+
+            self.kb.create_incident(
+                event.target_name,
+                event.anomaly_type,
+            )
 
             print(
                 f"[Analyzer] Detected "
