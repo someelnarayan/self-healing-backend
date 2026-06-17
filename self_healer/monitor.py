@@ -29,6 +29,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Deque, Dict
 
+import docker
 import httpx
 import psutil
 
@@ -175,6 +176,44 @@ def _collect_system() -> tuple[float, float]:
     return cpu_pct, ram_pct
 
 
+def _collect_container(
+    container_name: str,
+):
+
+    try:
+
+        client = docker.from_env()
+
+        container = client.containers.get(
+            container_name
+        )
+
+        stats = container.stats(
+            stream=False
+        )
+
+        memory_usage_mb = (
+            stats["memory_stats"]["usage"]
+            / (1024 * 1024)
+        )
+
+        return {
+            "memory_mb":
+            round(memory_usage_mb, 2)
+        }
+
+    except Exception as e:
+
+        print(
+            f"[Monitor] Container stats error: {e}",
+            flush=True,
+        )
+
+        return {
+            "memory_mb": 0
+        }
+
+
 # ------------------------------------------------------------------
 # Monitor
 # ------------------------------------------------------------------
@@ -255,6 +294,14 @@ class Monitor:
                     _collect_system,
                 ),
             ),
+            threading.Thread(
+                target=run,
+                args=(
+                    "container",
+                    _collect_container,
+                    target.container_name,
+                ),
+            ),
         ]
 
         for thread in threads:
@@ -278,6 +325,11 @@ class Monitor:
             (0.0, 0.0),
         )
 
+        container_stats = results.get(
+            "container",
+            {},
+        )
+
         signal = Signal(
             ts=datetime.utcnow(),
             target_name=target.name,
@@ -294,6 +346,8 @@ class Monitor:
             f"response_ms={response_ms} | "
             f"cpu={cpu_pct:.1f}% | "
             f"ram={ram_pct:.1f}% | "
+            f"container_mem="
+            f"{container_stats.get('memory_mb', 0)}MB | "
             f"errors={error_count}",
             flush=True,
         )

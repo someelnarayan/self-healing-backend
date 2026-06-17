@@ -381,6 +381,12 @@ class Executor:
 
         anomaly = plan.anomaly
 
+        self.kb.update_incident_status(
+            anomaly.target_name,
+            anomaly.anomaly_type,
+            "IN_PROGRESS",
+        )
+
         alert_message = (
             f"Anomaly: {anomaly.anomaly_type}\n"
             f"Severity: {anomaly.severity}\n"
@@ -448,6 +454,12 @@ class Executor:
             )
             if result.success:
 
+                self.kb.update_incident_status(
+                    anomaly.target_name,
+                    anomaly.anomaly_type,
+                    "RESOLVED",
+                )
+
                 self.kb.resolve_incident(
                     anomaly.target_name,
                     anomaly.anomaly_type,
@@ -456,6 +468,14 @@ class Executor:
                 self.kb.set_cooldown(
                     anomaly.target_name,
                     30,
+                )
+
+            else:
+
+                self.kb.update_incident_status(
+                    anomaly.target_name,
+                    anomaly.anomaly_type,
+                    "FAILED",
                 )
 
             results.append(result)

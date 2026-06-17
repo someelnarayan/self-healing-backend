@@ -411,7 +411,8 @@ class KnowledgeBase:
         )
 
         self._active_incidents[key] = {
-            "created_at": time.time()
+            "status": "OPEN",
+            "created_at": time.time(),
         }
 
 
@@ -435,4 +436,23 @@ class KnowledgeBase:
     def _now() -> str:
 
         return datetime.utcnow().isoformat()
+    
+
+    def update_incident_status(
+        self,
+        target_name: str,
+        anomaly_type: str,
+        status: str,
+    ):
+
+        key = (
+            target_name,
+            anomaly_type,
+        )
+
+        if key in self._active_incidents:
+
+            self._active_incidents[key][
+                "status"
+            ] = status
     
