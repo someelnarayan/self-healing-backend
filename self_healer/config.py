@@ -14,13 +14,32 @@ import yaml
 
 # ── Dataclasses ────────────────────────────────────────────────────────────────
 
+from dataclasses import dataclass
+
+
 @dataclass
 class Target:
     name: str
-    health_url: str
-    log_path: str
-    container_name: str
+
+    # Target type
+    # local | ssh | prometheus
+    type: str = "local"
+
+    # Local monitoring
+    health_url: str = ""
+    log_path: str = ""
+    container_name: str = ""
+
+    # Monitoring interval
     poll_interval_seconds: int = 10
+
+    # SSH monitoring (Phase 2)
+    host: str = ""
+    username: str = ""
+    ssh_key: str = ""
+
+    # Prometheus monitoring (Phase 3)
+    prometheus_url: str = ""
 
 
 @dataclass
