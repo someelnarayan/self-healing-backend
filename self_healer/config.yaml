@@ -1,15 +1,15 @@
-```yaml
+
 targets:
   - name: bookshop
 
     type: local
 
-    health_url: http://bookshop:8080/health
+    health_url: http://localhost:8080/health
     log_path: /var/log/bookshop/app.log
     container_name: bookshop
 
     poll_interval_seconds: 10
-```
+
 
 
 thresholds:

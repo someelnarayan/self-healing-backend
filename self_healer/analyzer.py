@@ -14,8 +14,6 @@ Analyzer NEVER restarts services.
 from __future__ import annotations
 
 from asyncio import events
-from curses import window
-from curses import window
 import json
 from dataclasses import asdict, dataclass
 from datetime import datetime

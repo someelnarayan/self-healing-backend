@@ -22,19 +22,16 @@ Analyzer is responsible for anomaly detection.
 
 from __future__ import annotations
 
-import re
 import threading
 from collections import deque
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Deque, Dict
 
-import docker
-import httpx
-import psutil
 
 from config import AppConfig, Target
 from knowledge import KnowledgeBase
+from collectors.collector_factory import CollectorFactory
 
 
 # ------------------------------------------------------------------
@@ -86,134 +83,6 @@ class TargetState:
 
         with self._lock:
             return list(self.ring)[-n:]
-
-
-# ------------------------------------------------------------------
-# Collectors
-# ------------------------------------------------------------------
-
-def _collect_http(
-    target: Target,
-) -> tuple[bool, int]:
-
-    try:
-
-        response = httpx.get(
-            target.health_url,
-            timeout=5.0,
-        )
-
-        response_ms = int(
-            response.elapsed.total_seconds()
-            * 1000
-        )
-
-        return (
-            response.status_code == 200,
-            response_ms,
-        )
-
-    except Exception as e:
-
-        print(
-            f"[Monitor] Health check failed "
-            f"for {target.name}: {e}",
-            flush=True,
-        )
-
-        return False, 9999
-
-
-def _collect_logs(
-    state: TargetState,
-) -> int:
-
-    patterns = re.compile(
-        r"ERROR|OOM|Exception|Traceback|500|OutOfMemory",
-        re.IGNORECASE,
-    )
-
-    count = 0
-
-    try:
-
-        with open(
-            state.target.log_path,
-            "r",
-            errors="replace",
-        ) as f:
-
-            f.seek(state._log_pos)
-
-            for line in f:
-
-                if patterns.search(line):
-                    count += 1
-
-            state._log_pos = f.tell()
-
-    except FileNotFoundError:
-
-        print(
-            f"[Monitor] Log file not found: "
-            f"{state.target.log_path}",
-            flush=True,
-        )
-
-    return count
-
-
-def _collect_system() -> tuple[float, float]:
-
-    cpu_pct = psutil.cpu_percent(
-        interval=1
-    )
-
-    ram_pct = (
-        psutil.virtual_memory().percent
-    )
-
-    return cpu_pct, ram_pct
-
-
-def _collect_container(
-    container_name: str,
-):
-
-    try:
-
-        client = docker.from_env()
-
-        container = client.containers.get(
-            container_name
-        )
-
-        stats = container.stats(
-            stream=False
-        )
-
-        memory_usage_mb = (
-            stats["memory_stats"]["usage"]
-            / (1024 * 1024)
-        )
-
-        return {
-            "memory_mb":
-            round(memory_usage_mb, 2)
-        }
-
-    except Exception as e:
-
-        print(
-            f"[Monitor] Container stats error: {e}",
-            flush=True,
-        )
-
-        return {
-            "memory_mb": 0
-        }
-
-
 # ------------------------------------------------------------------
 # Monitor
 # ------------------------------------------------------------------
@@ -237,6 +106,11 @@ class Monitor:
             for target in config.targets
         }
 
+        self.collectors = {
+            target.name: CollectorFactory.create(target)
+            for target in config.targets
+        }
+
         self._stop_event = threading.Event()
 
     def get_ring(
@@ -251,84 +125,38 @@ class Monitor:
         target: Target,
     ) -> Signal:
 
-        results = {}
-        errors = {}
-
-        def run(
-            key,
-            fn,
-            *args,
-        ):
-
-            try:
-
-                results[key] = fn(*args)
-
-            except Exception as e:
-
-                errors[key] = e
+        
 
         state = self._states[target.name]
+        collector = self.collectors[target.name]
 
-        threads = [
-            threading.Thread(
-                target=run,
-                args=(
-                    "http",
-                    _collect_http,
-                    target,
-                ),
-            ),
-            threading.Thread(
-                target=run,
-                args=(
-                    "logs",
-                    _collect_logs,
-                    state,
-                ),
-            ),
-            threading.Thread(
-                target=run,
-                args=(
-                    "sys",
-                    _collect_system,
-                ),
-            ),
-            threading.Thread(
-                target=run,
-                args=(
-                    "container",
-                    _collect_container,
-                    target.container_name,
-                ),
-            ),
-        ]
+        metrics = collector.collect()
 
-        for thread in threads:
-            thread.start()
-
-        for thread in threads:
-            thread.join(timeout=10)
-
-        health_ok, response_ms = results.get(
-            "http",
-            (False, 9999),
+        print(
+        f"[Collector Test] {metrics}",
+        flush=True,
         )
 
-        error_count = results.get(
-            "logs",
-            0,
-        )
+        
 
-        cpu_pct, ram_pct = results.get(
-            "sys",
-            (0.0, 0.0),
-        )
+        
 
-        container_stats = results.get(
-            "container",
-            {},
+        health_ok = metrics["healthy"]
+
+        response_ms = metrics["response_ms"]
+
+        error_count = metrics["error_count"]
+
+        cpu_pct = metrics["cpu_pct"]
+
+        ram_pct = metrics["ram_pct"]
+
+        container_stats = {
+            "memory_mb": metrics.get(
+                "memory_mb",
+                0,
         )
+    }
 
         signal = Signal(
             ts=datetime.utcnow(),
