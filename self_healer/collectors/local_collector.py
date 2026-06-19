@@ -1,4 +1,5 @@
 from config import Target
+from collectors.base_collector import BaseCollector
 
 import re
 import docker
