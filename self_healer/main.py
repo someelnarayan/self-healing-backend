@@ -19,6 +19,8 @@ from monitor import Monitor
 from planner import Planner
 from fastapi.middleware.cors import CORSMiddleware
 
+print("MAIN FILE LOADED")
+
 
 CONFIG_PATH = Path(__file__).parent / "config.yaml"
 
@@ -235,6 +237,19 @@ def recovery():
         for t in config.targets
     ]
 
+@app.get("/targets")
+def targets():
+
+    return [
+        {
+            "name": t.name,
+            "type": t.type,
+        }
+        for t in config.targets
+    ]
+
+
+
 
 @app.get("/stream")
 async def stream():
@@ -283,7 +298,6 @@ def dashboard():
     </html>
     """
 
-
 if __name__ == "__main__":
     uvicorn.run(
         "main:app",
@@ -291,3 +305,4 @@ if __name__ == "__main__":
         port=8000,
         reload=True,
     )
+

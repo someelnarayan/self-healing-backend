@@ -31,7 +31,9 @@ class SSHCollector(BaseCollector):
 
         try:
 
+            # -------------------------
             # Hostname
+            # -------------------------
 
             stdin, stdout, stderr = client.exec_command(
                 "hostname"
@@ -43,7 +45,9 @@ class SSHCollector(BaseCollector):
                 .strip()
             )
 
-           # CPU
+            # -------------------------
+            # CPU
+            # -------------------------
 
             stdin, stdout, stderr = client.exec_command(
                 "top -bn1 | grep 'Cpu(s)'"
@@ -62,34 +66,45 @@ class SSHCollector(BaseCollector):
 
             cpu_pct = 0.0
 
-            for part in cpu_output.split(","):
+            try:
 
-                part = part.strip()
+                for part in cpu_output.split(","):
 
-                if " id" in part:
+                    part = part.strip()
 
-                    idle = float(
-                    part.split()[0]
-                    )
+                    if " id" in part:
 
-                    print(
-                        f"[SSH DEBUG] idle={idle}",
-                        flush=True,
-                    )
+                        idle = float(
+                            part.split()[0]
+                        )
 
-                    cpu_pct = round(
-                    100 - idle,
-                    2,
-                    )
+                        print(
+                            f"[SSH DEBUG] idle={idle}",
+                            flush=True,
+                        )
 
-                    print(
-                    f"[SSH DEBUG] cpu_pct={cpu_pct}",
+                        cpu_pct = round(
+                            100 - idle,
+                            2,
+                        )
+
+                        print(
+                            f"[SSH DEBUG] cpu_pct={cpu_pct}",
+                            flush=True,
+                        )
+
+                        break
+
+            except Exception as e:
+
+                print(
+                    f"[SSH] CPU parse error: {e}",
                     flush=True,
                 )
 
-                break
-
+            # -------------------------
             # RAM
+            # -------------------------
 
             stdin, stdout, stderr = client.exec_command(
                 "free -m"
@@ -120,7 +135,9 @@ class SSHCollector(BaseCollector):
                 2,
             )
 
+            # -------------------------
             # Disk
+            # -------------------------
 
             stdin, stdout, stderr = client.exec_command(
                 "df -h /"
@@ -138,11 +155,35 @@ class SSHCollector(BaseCollector):
                 .replace("%", "")
             )
 
+            # -------------------------
+            # SSH Service Status
+            # -------------------------
+
+            stdin, stdout, stderr = client.exec_command(
+                "systemctl is-active ssh"
+            )
+
+            ssh_status = (
+                stdout.read()
+                .decode()
+                .strip()
+            )
+
+            print(
+                f"[SSH] ssh_service={ssh_status}",
+                flush=True,
+            )
+
+            # -------------------------
+            # Final Log
+            # -------------------------
+
             print(
                 f"[SSH] {hostname} | "
                 f"cpu={cpu_pct}% | "
                 f"ram={ram_pct}% | "
-                f"disk={disk_pct}%",
+                f"disk={disk_pct}% | "
+                f"ssh={ssh_status}",
                 flush=True,
             )
 
@@ -153,6 +194,8 @@ class SSHCollector(BaseCollector):
                 "cpu_pct": cpu_pct,
                 "ram_pct": ram_pct,
                 "memory_mb": used_ram,
+                "ssh_status": ssh_status,
+                "disk_pct": disk_pct,
             }
 
         except Exception as e:
@@ -169,6 +212,8 @@ class SSHCollector(BaseCollector):
                 "cpu_pct": 0,
                 "ram_pct": 0,
                 "memory_mb": 0,
+                "ssh_status": "unknown",
+                "disk_pct": 0,
             }
 
         finally:

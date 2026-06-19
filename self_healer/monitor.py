@@ -129,7 +129,14 @@ class Monitor:
         collector = self.collectors[target.name]
 
         metrics = collector.collect()
-        
+        if "ssh_status" in metrics:
+
+            print(
+                f"[Monitor] SSH Status = "
+                f"{metrics['ssh_status']}",
+                flush=True,
+            )
+
         health_ok = metrics["healthy"]
 
         response_ms = metrics["response_ms"]
