@@ -10,9 +10,11 @@ targets:
   - name: ssh-test
     type: ssh
 
-    host: ""
-    username: ""
-    ssh_key: ""
+    host: 172.29.69.164
+
+    username: hpsomeel
+
+    ssh_key: C:/Users/Hp/.ssh/id_rsa
 
   - name: prometheus-test
     type: prometheus
