@@ -1,4 +1,3 @@
-
 targets:
 
   - name: bookshop
@@ -8,12 +7,17 @@ targets:
     log_path: /var/log/bookshop/app.log
     container_name: bookshop
 
-  - name: aws-server
+  - name: ssh-test
     type: ssh
 
-    host: 12.34.56.78
-    username: ubuntu
-    ssh_key: ~/.ssh/aws.pem
+    host: ""
+    username: ""
+    ssh_key: ""
+
+  - name: prometheus-test
+    type: prometheus
+
+    prometheus_url: ""
 
 
 

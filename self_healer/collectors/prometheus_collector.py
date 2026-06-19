@@ -1,9 +1,7 @@
 from collectors.base_collector import BaseCollector
 
-import paramiko
 
-
-class SSHCollector(BaseCollector):
+class PrometheusCollector(BaseCollector):
 
     def __init__(self, target):
         self.target = target

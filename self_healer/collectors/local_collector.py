@@ -6,7 +6,7 @@ import httpx
 import psutil
 
 
-class LocalCollector:
+class LocalCollector(BaseCollector):
 
     def __init__(self, target: Target):
         self.target = target
