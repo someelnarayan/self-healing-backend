@@ -1,27 +1,17 @@
-"""
-config.py  ·  Config loader + validator
-Reads config.yaml, exposes typed dataclasses to every other module.
-"""
 from __future__ import annotations
 
 import os
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 from typing import List, Optional
 
 import yaml
 
 
-# ── Dataclasses ────────────────────────────────────────────────────────────────
-
-from dataclasses import dataclass
-
-
 @dataclass
 class Target:
     name: str
 
-    # Target type
     # local | ssh | prometheus
     type: str = "local"
 
@@ -33,12 +23,12 @@ class Target:
     # Monitoring interval
     poll_interval_seconds: int = 10
 
-    # SSH monitoring (Phase 2)
+    # SSH monitoring
     host: str = ""
     username: str = ""
     ssh_key: str = ""
 
-    # Prometheus monitoring (Phase 3)
+    # Prometheus monitoring
     prometheus_url: str = ""
 
 
@@ -74,22 +64,20 @@ class AppConfig:
     thresholds: Thresholds
     rules: List[Rule]
     alerting: Alerting
-    knowledge_db_path: str = "/tmp/knowledge.db"
+    knowledge_db_path: str = "knowledge.db"
 
     def rule_for(self, anomaly_type: str) -> Optional[Rule]:
-        for r in self.rules:
-            if r.anomaly_type == anomaly_type:
-                return r
+        for rule in self.rules:
+            if rule.anomaly_type == anomaly_type:
+                return rule
         return None
 
-
-# ── Loader ─────────────────────────────────────────────────────────────────────
 
 _CONFIG_PATH = Path(__file__).parent / "config.yaml"
 
 
 def load_config(path: Path = _CONFIG_PATH) -> AppConfig:
-    with open(path) as f:
+    with open(path, "r", encoding="utf-8") as f:
         raw = yaml.safe_load(f)
 
     targets = [Target(**t) for t in raw.get("targets", [])]
@@ -97,12 +85,22 @@ def load_config(path: Path = _CONFIG_PATH) -> AppConfig:
     rules = [Rule(**r) for r in raw.get("rules", [])]
 
     al = raw.get("alerting", {})
+
     alerting = Alerting(
-        slack_webhook_url=os.getenv("SLACK_WEBHOOK_URL") or al.get("slack_webhook_url", ""),
-        smtp_host=os.getenv("SMTP_HOST") or al.get("smtp_host", ""),
+        slack_webhook_url=os.getenv("SLACK_WEBHOOK_URL")
+        or al.get("slack_webhook_url", ""),
+
+        smtp_host=os.getenv("SMTP_HOST")
+        or al.get("smtp_host", ""),
+
         smtp_port=int(al.get("smtp_port", 587)),
-        smtp_user=os.getenv("SMTP_USER") or al.get("smtp_user", ""),
-        smtp_pass=os.getenv("SMTP_PASS") or al.get("smtp_pass", ""),
+
+        smtp_user=os.getenv("SMTP_USER")
+        or al.get("smtp_user", ""),
+
+        smtp_pass=os.getenv("SMTP_PASS")
+        or al.get("smtp_pass", ""),
+
         alert_email_to=al.get("alert_email_to", ""),
     )
 
@@ -111,5 +109,8 @@ def load_config(path: Path = _CONFIG_PATH) -> AppConfig:
         thresholds=thresholds,
         rules=rules,
         alerting=alerting,
-        knowledge_db_path=raw.get("knowledge_db_path", "/tmp/knowledge.db"),
+        knowledge_db_path=raw.get(
+            "knowledge_db_path",
+            "knowledge.db",
+        ),
     )

@@ -147,12 +147,20 @@ class Monitor:
 
         ram_pct = metrics["ram_pct"]
 
-        container_stats = {
-            "memory_mb": metrics.get(
-                "memory_mb",
-                0,
+        memory_mb = metrics.get(
+            "memory_mb",
+            0,
         )
-    }
+
+        disk_pct = metrics.get(
+            "disk_pct",
+            0,
+        )
+
+        ssh_status = metrics.get(
+            "ssh_status",
+            "unknown",
+        )
 
         signal = Signal(
             ts=datetime.utcnow(),
@@ -170,8 +178,9 @@ class Monitor:
             f"response_ms={response_ms} | "
             f"cpu={cpu_pct:.1f}% | "
             f"ram={ram_pct:.1f}% | "
-            f"container_mem="
-            f"{container_stats.get('memory_mb', 0)}MB | "
+            f"memory={memory_mb}MB | "
+            f"disk={disk_pct}% | "
+            f"ssh={ssh_status} | "
             f"errors={error_count}",
             flush=True,
         )
@@ -180,8 +189,14 @@ class Monitor:
 
         self.kb.write_signal(
             target_name=target.name,
+
             cpu_pct=cpu_pct,
             ram_pct=ram_pct,
+
+            memory_mb=memory_mb,
+            disk_pct=disk_pct,
+            ssh_status=ssh_status,
+
             response_ms=response_ms,
             health_ok=health_ok,
             error_count=error_count,

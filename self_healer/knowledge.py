@@ -59,8 +59,15 @@ class KnowledgeBase:
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     ts TEXT,
                     target_name TEXT,
+
                     cpu_pct REAL,
                     ram_pct REAL,
+
+                    memory_mb REAL,
+                    disk_pct REAL,
+
+                    ssh_status TEXT,
+
                     response_ms INTEGER,
                     health_ok INTEGER,
                     error_count INTEGER
@@ -125,9 +132,14 @@ class KnowledgeBase:
         target_name,
         cpu_pct,
         ram_pct,
-        response_ms,
-        health_ok,
-        error_count,
+
+        memory_mb=0,
+        disk_pct=0,
+        ssh_status="unknown",
+
+        response_ms=0,
+        health_ok=True,
+        error_count=0,
     ):
 
         with self._lock, self._conn() as conn:
@@ -137,19 +149,31 @@ class KnowledgeBase:
                 INSERT INTO signal_log (
                     ts,
                     target_name,
+
                     cpu_pct,
                     ram_pct,
+
+                    memory_mb,
+                    disk_pct,
+                    ssh_status,
+
                     response_ms,
                     health_ok,
                     error_count
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     self._now(),
                     target_name,
+
                     cpu_pct,
                     ram_pct,
+
+                    memory_mb,
+                    disk_pct,
+                    ssh_status,
+
                     response_ms,
                     int(health_ok),
                     error_count,
@@ -237,8 +261,21 @@ class KnowledgeBase:
     ):
 
         query = """
-            SELECT id, ts, target_name, cpu_pct, ram_pct,
-                   response_ms, health_ok, error_count
+            SELECT
+                id,
+                ts,
+                target_name,
+
+                cpu_pct,
+                ram_pct,
+
+                memory_mb,
+                disk_pct,
+                ssh_status,
+
+                response_ms,
+                health_ok,
+                error_count
             FROM signal_log
         """
         params: list = []
@@ -258,11 +295,17 @@ class KnowledgeBase:
                 "id": r[0],
                 "ts": r[1],
                 "target_name": r[2],
+
                 "cpu_pct": r[3],
                 "ram_pct": r[4],
-                "response_ms": r[5],
-                "health_ok": bool(r[6]),
-                "error_count": r[7],
+
+                "memory_mb": r[5],
+                "disk_pct": r[6],
+                "ssh_status": r[7],
+
+                "response_ms": r[8],
+                "health_ok": bool(r[9]),
+                "error_count": r[10],
             }
             for r in rows
         ]

@@ -1,3 +1,5 @@
+version: "3.9"
+
 services:
   bookshop:
     build: ./bookshop
@@ -14,8 +16,12 @@ services:
     ports:
       - "8000:8000"
     volumes:
+      - ./self_healer:/app
       - ./logs:/var/log/bookshop
       - /var/run/docker.sock:/var/run/docker.sock
+      - C:/Users/Hp/.ssh:/root/.ssh:ro
+    working_dir: /app
+    command: uvicorn main:app --host 0.0.0.0 --port 8000 --reload
     depends_on:
       - bookshop
     environment:

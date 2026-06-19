@@ -11,6 +11,9 @@ import AuditPage from "./pages/AuditPage";
 import RecoveryPage from "./pages/RecoveryPage";
 import { useEffect, useState } from "react";
 import { fetchStatus } from "./services/api";
+import LocalPage from "./pages/LocalPage";
+import SSHPage from "./pages/SSHPage";
+import PrometheusPage from "./pages/PrometheusPage";
 
 const DRAWER_W = 240;
 
@@ -57,6 +60,9 @@ export default function App() {
                 <Route path="/anomalies" element={<AnomaliesPage />} />
                 <Route path="/recovery"  element={<RecoveryPage />} />
                 <Route path="/audit"     element={<AuditPage />} />
+                <Route path="/local" element={<LocalPage />} />
+                <Route path="/ssh" element={<SSHPage />} />
+                <Route path="/prometheus" element={<PrometheusPage />} />
               </Routes>
             </Box>
           </Box>

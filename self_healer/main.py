@@ -19,7 +19,6 @@ from monitor import Monitor
 from planner import Planner
 from fastapi.middleware.cors import CORSMiddleware
 
-
 CONFIG_PATH = Path(__file__).parent / "config.yaml"
 
 config: AppConfig = load_config(CONFIG_PATH)
@@ -138,6 +137,15 @@ def healer_health():
         "status": "ok",
         "service": "self-healer",
     }
+@app.get("/targets")
+def targets():
+    return [
+        {
+            "name": t.name,
+            "type": t.type,
+        }
+        for t in config.targets
+    ]
 
 
 @app.get("/status")
@@ -231,17 +239,6 @@ def recovery():
             "target": t.name,
             "on_cooldown": kb.is_on_cooldown(t.name),
             "cooldown_remaining": kb.get_cooldown_remaining(t.name),
-        }
-        for t in config.targets
-    ]
-
-@app.get("/targets")
-def targets():
-
-    return [
-        {
-            "name": t.name,
-            "type": t.type,
         }
         for t in config.targets
     ]

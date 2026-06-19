@@ -3,7 +3,7 @@ targets:
   - name: bookshop
     type: local
 
-    health_url: http://localhost:8080/health
+    health_url: http://bookshop:8080
     log_path: /var/log/bookshop/app.log
     container_name: bookshop
 
@@ -11,15 +11,13 @@ targets:
     type: ssh
 
     host: 172.29.69.164
-
     username: hpsomeel
-
-    ssh_key: C:/Users/Hp/.ssh/id_rsa
+    ssh_key: /root/.ssh/id_rsa
 
   - name: prom-local
     type: prometheus
-    prometheus_url: http://localhost:9090
 
+    prometheus_url: http://localhost:9090
 
 
 thresholds:
@@ -27,12 +25,11 @@ thresholds:
   ram_percent: 80.0
   response_time_ms: 3000
   error_rate_per_window: 5
-
-  # Reduced for testing.
-  # Original value was 5.
   sliding_window_size: 5
 
+
 rules:
+
   - anomaly_type: MEMORY_LEAK
     actions:
       - restart_service
@@ -62,6 +59,7 @@ rules:
       - send_alert
     cooldown_minutes: 10
 
+
 alerting:
   slack_webhook_url: ""
   smtp_host: ""
@@ -69,5 +67,6 @@ alerting:
   smtp_user: ""
   smtp_pass: ""
   alert_email_to: "ops@example.com"
+
 
 knowledge_db_path: knowledge.db
