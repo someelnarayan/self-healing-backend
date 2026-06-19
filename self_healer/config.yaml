@@ -1,14 +1,19 @@
 
 targets:
-  - name: bookshop
 
+  - name: bookshop
     type: local
 
     health_url: http://localhost:8080/health
     log_path: /var/log/bookshop/app.log
     container_name: bookshop
 
-    poll_interval_seconds: 10
+  - name: aws-server
+    type: ssh
+
+    host: 12.34.56.78
+    username: ubuntu
+    ssh_key: ~/.ssh/aws.pem
 
 
 

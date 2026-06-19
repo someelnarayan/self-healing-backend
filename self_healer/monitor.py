@@ -64,8 +64,6 @@ class TargetState:
         self.ring: Deque[Signal] = deque(
             maxlen=ring_size
         )
-
-        self._log_pos = 0
         self._lock = threading.Lock()
 
     def push(
@@ -131,16 +129,7 @@ class Monitor:
         collector = self.collectors[target.name]
 
         metrics = collector.collect()
-
-        print(
-        f"[Collector Test] {metrics}",
-        flush=True,
-        )
-
         
-
-        
-
         health_ok = metrics["healthy"]
 
         response_ms = metrics["response_ms"]
