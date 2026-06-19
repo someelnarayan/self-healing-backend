@@ -16,10 +16,9 @@ targets:
 
     ssh_key: C:/Users/Hp/.ssh/id_rsa
 
-  - name: prometheus-test
+  - name: prom-local
     type: prometheus
-
-    prometheus_url: ""
+    prometheus_url: http://localhost:9090
 
 
 

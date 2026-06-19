@@ -19,8 +19,6 @@ from monitor import Monitor
 from planner import Planner
 from fastapi.middleware.cors import CORSMiddleware
 
-print("MAIN FILE LOADED")
-
 
 CONFIG_PATH = Path(__file__).parent / "config.yaml"
 
