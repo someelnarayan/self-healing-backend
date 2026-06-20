@@ -1,23 +1,31 @@
 targets:
-
-  - name: bookshop
+  - id: bookshop
+    name: bookshop
     type: local
-
     health_url: http://bookshop:8080
     log_path: /var/log/bookshop/app.log
     container_name: bookshop
+    poll_interval_seconds: 10
+    metadata:
+      service_kind: app
 
-  - name: ssh-test
+  - id: ssh-test
+    name: ssh-test
     type: ssh
-
     host: 172.29.69.164
     username: hpsomeel
     ssh_key: /root/.ssh/id_rsa
+    poll_interval_seconds: 10
+    metadata:
+      service_kind: ssh_target
 
-  - name: prom-local
+  - id: prom-local
+    name: prom-local
     type: prometheus
-
     prometheus_url: http://prometheus:9090
+    poll_interval_seconds: 10
+    metadata:
+      service_kind: metrics_source
 
 
 thresholds:
@@ -29,35 +37,46 @@ thresholds:
 
 
 rules:
-
   - anomaly_type: MEMORY_LEAK
     actions:
       - restart_service
       - send_alert
     cooldown_minutes: 2
+    enabled: true
 
   - anomaly_type: HIGH_CPU
     actions:
       - send_alert
       - restart_service
     cooldown_minutes: 10
+    enabled: true
 
   - anomaly_type: HEALTH_CHECK_FAIL
     actions:
       - restart_service
       - send_alert
     cooldown_minutes: 3
+    enabled: true
 
   - anomaly_type: HIGH_ERROR_RATE
     actions:
       - send_alert
       - retry_http_endpoint
     cooldown_minutes: 5
+    enabled: true
 
   - anomaly_type: SLOW_RESPONSE
     actions:
       - send_alert
     cooldown_minutes: 10
+    enabled: true
+
+  - anomaly_type: HIGH_RAM
+    actions:
+      - send_alert
+      - restart_service
+    cooldown_minutes: 10
+    enabled: true
 
 
 alerting:

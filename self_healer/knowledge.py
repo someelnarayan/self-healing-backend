@@ -6,15 +6,18 @@ import time
 import uuid
 from contextlib import contextmanager
 from datetime import datetime
+from typing import Any, Dict, Optional
 
 
 class KnowledgeBase:
-
     def __init__(self, db_path: str = "knowledge.db"):
-
         self._lock = threading.Lock()
-        self._cooldowns = {}
-        self._active_incidents = {}
+
+        # cooldown_key -> expiry_timestamp
+        self._cooldowns: Dict[str, float] = {}
+
+        # (target_name, anomaly_type) -> incident state
+        self._active_incidents: Dict[tuple, Dict[str, Any]] = {}
 
         self.db_path = self._normalize_db_path(db_path)
 
@@ -28,46 +31,48 @@ class KnowledgeBase:
 
         self._init_db()
 
-    def _normalize_db_path(self, db_path: str) -> str:
+    # ------------------------------------------------------------
+    # Internal helpers
+    # ------------------------------------------------------------
 
+    def _normalize_db_path(self, db_path: str) -> str:
         if db_path == ":memory:":
             return (
                 f"file:kb_{uuid.uuid4().hex}"
                 f"?mode=memory&cache=shared"
             )
-
         return db_path
 
     @contextmanager
     def _conn(self):
-
         try:
             yield self._connection
             self._connection.commit()
-
         except Exception:
             self._connection.rollback()
             raise
 
+    @staticmethod
+    def _now() -> str:
+        return datetime.utcnow().isoformat()
+
+    # ------------------------------------------------------------
+    # Database initialization
+    # ------------------------------------------------------------
+
     def _init_db(self):
-
         with self._lock, self._conn() as conn:
-
             conn.execute(
                 """
                 CREATE TABLE IF NOT EXISTS signal_log (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     ts TEXT,
                     target_name TEXT,
-
                     cpu_pct REAL,
                     ram_pct REAL,
-
                     memory_mb REAL,
                     disk_pct REAL,
-
                     ssh_status TEXT,
-
                     response_ms INTEGER,
                     health_ok INTEGER,
                     error_count INTEGER
@@ -104,10 +109,12 @@ class KnowledgeBase:
                 """
             )
 
+    # ------------------------------------------------------------
+    # Summary
+    # ------------------------------------------------------------
+
     def summary(self):
-
         with self._lock, self._conn() as conn:
-
             signal_count = conn.execute(
                 "SELECT COUNT(*) FROM signal_log"
             ).fetchone()[0]
@@ -125,38 +132,37 @@ class KnowledgeBase:
             "signals": signal_count,
             "anomalies": anomaly_count,
             "audits": audit_count,
+            "active_incidents": len(self._active_incidents),
+            "active_cooldowns": len(self._cooldowns),
         }
+
+    # ------------------------------------------------------------
+    # Write methods
+    # ------------------------------------------------------------
 
     def write_signal(
         self,
         target_name,
         cpu_pct,
         ram_pct,
-
         memory_mb=0,
         disk_pct=0,
         ssh_status="unknown",
-
         response_ms=0,
         health_ok=True,
         error_count=0,
     ):
-
         with self._lock, self._conn() as conn:
-
             conn.execute(
                 """
                 INSERT INTO signal_log (
                     ts,
                     target_name,
-
                     cpu_pct,
                     ram_pct,
-
                     memory_mb,
                     disk_pct,
                     ssh_status,
-
                     response_ms,
                     health_ok,
                     error_count
@@ -166,14 +172,11 @@ class KnowledgeBase:
                 (
                     self._now(),
                     target_name,
-
                     cpu_pct,
                     ram_pct,
-
                     memory_mb,
                     disk_pct,
                     ssh_status,
-
                     response_ms,
                     int(health_ok),
                     error_count,
@@ -188,9 +191,7 @@ class KnowledgeBase:
         metric_value,
         context,
     ):
-
         with self._lock, self._conn() as conn:
-
             conn.execute(
                 """
                 INSERT INTO anomaly_log (
@@ -222,9 +223,7 @@ class KnowledgeBase:
         duration_ms,
         error_msg=None,
     ):
-
         with self._lock, self._conn() as conn:
-
             conn.execute(
                 """
                 INSERT INTO audit_log (
@@ -250,8 +249,7 @@ class KnowledgeBase:
             )
 
     # ------------------------------------------------------------
-    # Read methods (used by the FastAPI /signals, /anomalies,
-    # /audit endpoints for the React dashboard)
+    # Read methods (used by FastAPI / dashboard endpoints)
     # ------------------------------------------------------------
 
     def get_signals(
@@ -259,20 +257,16 @@ class KnowledgeBase:
         limit: int = 100,
         target_name: str | None = None,
     ):
-
         query = """
             SELECT
                 id,
                 ts,
                 target_name,
-
                 cpu_pct,
                 ram_pct,
-
                 memory_mb,
                 disk_pct,
                 ssh_status,
-
                 response_ms,
                 health_ok,
                 error_count
@@ -295,14 +289,11 @@ class KnowledgeBase:
                 "id": r[0],
                 "ts": r[1],
                 "target_name": r[2],
-
                 "cpu_pct": r[3],
                 "ram_pct": r[4],
-
                 "memory_mb": r[5],
                 "disk_pct": r[6],
                 "ssh_status": r[7],
-
                 "response_ms": r[8],
                 "health_ok": bool(r[9]),
                 "error_count": r[10],
@@ -315,10 +306,15 @@ class KnowledgeBase:
         limit: int = 100,
         target_name: str | None = None,
     ):
-
         query = """
-            SELECT id, ts, target_name, anomaly_type,
-                   severity, metric_value, context
+            SELECT
+                id,
+                ts,
+                target_name,
+                anomaly_type,
+                severity,
+                metric_value,
+                context
             FROM anomaly_log
         """
         params: list = []
@@ -351,10 +347,16 @@ class KnowledgeBase:
         limit: int = 100,
         target_name: str | None = None,
     ):
-
         query = """
-            SELECT id, ts, target_name, anomaly_type,
-                   action, success, duration_ms, error_msg
+            SELECT
+                id,
+                ts,
+                target_name,
+                anomaly_type,
+                action,
+                success,
+                duration_ms,
+                error_msg
             FROM audit_log
         """
         params: list = []
@@ -383,103 +385,69 @@ class KnowledgeBase:
             for r in rows
         ]
 
+    # ------------------------------------------------------------
+    # Cooldown management
+    # ------------------------------------------------------------
+
     def set_cooldown(
         self,
-        target_name: str,
+        cooldown_key: str,
         seconds: int = 30,
     ):
-
-        self._cooldowns[target_name] = (
-            time.time() + seconds
-        )
+        self._cooldowns[cooldown_key] = time.time() + seconds
 
     def is_on_cooldown(
         self,
-        target_name: str,
+        cooldown_key: str,
     ) -> bool:
-
-        return (
-            self._cooldowns.get(target_name, 0)
-            > time.time()
-        )
+        return self._cooldowns.get(cooldown_key, 0) > time.time()
 
     def clear_cooldown(
         self,
-        target_name: str,
+        cooldown_key: str,
     ):
-
-        self._cooldowns.pop(
-            target_name,
-            None,
-        )
+        self._cooldowns.pop(cooldown_key, None)
 
     def get_cooldown_remaining(
         self,
-        target_name: str,
+        cooldown_key: str,
     ) -> int:
-
-        expiry = self._cooldowns.get(
-            target_name,
-            0,
-        )
-
-        remaining = int(
-            expiry - time.time()
-        )
-
+        expiry = self._cooldowns.get(cooldown_key, 0)
+        remaining = int(expiry - time.time())
         return max(0, remaining)
+
+    # ------------------------------------------------------------
+    # Incident tracking (in-memory for now)
+    # ------------------------------------------------------------
+
     def incident_exists(
         self,
         target_name: str,
         anomaly_type: str,
     ) -> bool:
-
-        key = (
-            target_name,
-            anomaly_type,
-        )
-
+        key = (target_name, anomaly_type)
         return key in self._active_incidents
-
 
     def create_incident(
         self,
         target_name: str,
         anomaly_type: str,
     ):
-
-        key = (
-            target_name,
-            anomaly_type,
-        )
+        key = (target_name, anomaly_type)
 
         self._active_incidents[key] = {
             "status": "OPEN",
             "created_at": time.time(),
+            "updated_at": time.time(),
         }
-
 
     def resolve_incident(
         self,
         target_name: str,
         anomaly_type: str,
     ):
-
-        key = (
-        target_name,
-        anomaly_type,
-        )
-
-        self._active_incidents.pop(
-            key,
-            None,
-    )
-
-    @staticmethod
-    def _now() -> str:
-
-        return datetime.utcnow().isoformat()
-    
+        key = (target_name, anomaly_type)
+        self._active_incidents.pop(key, None)
 
     def update_incident_status(
         self,
@@ -487,15 +455,36 @@ class KnowledgeBase:
         anomaly_type: str,
         status: str,
     ):
-
-        key = (
-            target_name,
-            anomaly_type,
-        )
+        key = (target_name, anomaly_type)
 
         if key in self._active_incidents:
+            self._active_incidents[key]["status"] = status
+            self._active_incidents[key]["updated_at"] = time.time()
 
-            self._active_incidents[key][
-                "status"
-            ] = status
-    
+    def get_incident_status(
+        self,
+        target_name: str,
+        anomaly_type: str,
+    ) -> Optional[str]:
+        key = (target_name, anomaly_type)
+
+        if key not in self._active_incidents:
+            return None
+
+        return self._active_incidents[key].get("status")
+
+    def get_active_incidents(self):
+        results = []
+
+        for (target_name, anomaly_type), data in self._active_incidents.items():
+            results.append(
+                {
+                    "target_name": target_name,
+                    "anomaly_type": anomaly_type,
+                    "status": data.get("status", "OPEN"),
+                    "created_at": data.get("created_at"),
+                    "updated_at": data.get("updated_at"),
+                }
+            )
+
+        return results

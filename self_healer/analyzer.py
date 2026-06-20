@@ -13,7 +13,6 @@ Analyzer NEVER restarts services.
 
 from __future__ import annotations
 
-from asyncio import events
 import json
 from dataclasses import asdict, dataclass
 from datetime import datetime
@@ -54,12 +53,11 @@ def _all_above(
     attr: str,
     threshold: float,
 ) -> bool:
-
     if not signals:
         return False
 
     return all(
-        getattr(signal, attr) > threshold
+        getattr(signal, attr, 0) > threshold
         for signal in signals
     )
 
@@ -68,14 +66,16 @@ def _memory_leak_trend(
     signals: List[Signal],
     min_growth: float = 15.0,
 ) -> bool:
-
+    """
+    Detects a likely memory leak pattern:
+    - need at least 5 signals
+    - RAM keeps increasing across the window
+    - total RAM growth exceeds min_growth
+    """
     if len(signals) < 5:
         return False
 
-    values = [
-        signal.ram_pct
-        for signal in signals
-    ]
+    values = [signal.ram_pct for signal in signals]
 
     increasing_steps = sum(
         1
@@ -83,21 +83,19 @@ def _memory_leak_trend(
         if values[i] > values[i - 1]
     )
 
-    growth = (
-        values[-1] - values[0]
-    )
+    growth = values[-1] - values[0]
 
     return (
         increasing_steps >= len(values) - 1
         and growth >= min_growth
     )
 
+
 # ------------------------------------------------------------------
 # Analyzer
 # ------------------------------------------------------------------
 
 class Analyzer:
-
     def __init__(
         self,
         config: AppConfig,
@@ -114,25 +112,17 @@ class Analyzer:
     ) -> List[AnomalyEvent]:
 
         thresholds = self.config.thresholds
-
         window_size = thresholds.sliding_window_size
 
-        state = self.monitor.get_ring(
-            target_name
-        )
-
-        window = state.last_n(
-            window_size
-        )
+        state = self.monitor.get_ring(target_name)
+        window = state.last_n(window_size)
 
         if len(window) < window_size:
-
             print(
                 f"[Analyzer] Waiting for more signals "
                 f"({len(window)}/{window_size})",
                 flush=True,
             )
-
             return []
 
         events: List[AnomalyEvent] = []
@@ -141,18 +131,15 @@ class Analyzer:
         # HEALTH CHECK FAILURE
         # Require consecutive failures
         # ----------------------------------------------------------
-
         consecutive_failures = 0
 
         for signal in reversed(window):
-
             if not signal.health_ok:
                 consecutive_failures += 1
             else:
                 break
 
         if consecutive_failures >= 2:
-
             events.append(
                 AnomalyEvent(
                     anomaly_type="HEALTH_CHECK_FAIL",
@@ -162,30 +149,24 @@ class Analyzer:
                         else "HIGH"
                     ),
                     target_name=target_name,
-                    metric_value=float(
-                        consecutive_failures
-                    ),
+                    metric_value=float(consecutive_failures),
                     context={
-                        "consecutive_failures":
-                        consecutive_failures,
-                        "window_size":
-                        window_size,
+                        "consecutive_failures": consecutive_failures,
+                        "window_size": window_size,
                     },
                 )
             )
 
         # ----------------------------------------------------------
         # HIGH CPU
+        # Trigger only if CPU stays above threshold for whole window
         # ----------------------------------------------------------
-
         if _all_above(
             window,
             "cpu_pct",
             thresholds.cpu_percent,
         ):
-
             latest = window[-1]
-
             events.append(
                 AnomalyEvent(
                     anomaly_type="HIGH_CPU",
@@ -193,52 +174,64 @@ class Analyzer:
                     target_name=target_name,
                     metric_value=latest.cpu_pct,
                     context={
-                        "cpu_pct":
-                        latest.cpu_pct
+                        "cpu_pct": latest.cpu_pct,
+                        "threshold": thresholds.cpu_percent,
+                    },
+                )
+            )
+
+        # ----------------------------------------------------------
+        # HIGH RAM
+        # Trigger if RAM stays above threshold for whole window
+        # ----------------------------------------------------------
+        if _all_above(
+            window,
+            "ram_pct",
+            thresholds.ram_percent,
+        ):
+            latest = window[-1]
+            events.append(
+                AnomalyEvent(
+                    anomaly_type="HIGH_RAM",
+                    severity="HIGH",
+                    target_name=target_name,
+                    metric_value=latest.ram_pct,
+                    context={
+                        "ram_pct": latest.ram_pct,
+                        "threshold": thresholds.ram_percent,
                     },
                 )
             )
 
         # ----------------------------------------------------------
         # MEMORY LEAK TREND
+        # Detect steady RAM growth across the window
         # ----------------------------------------------------------
-
         if _memory_leak_trend(window):
-
             latest = window[-1]
-
             events.append(
-            AnomalyEvent(
-                anomaly_type="MEMORY_LEAK",
-                severity="HIGH",
-                target_name=target_name,
-                metric_value=latest.ram_pct,
-                context={
-                    "start_ram":
-                    window[0].ram_pct,
-
-                    "end_ram":
-                    latest.ram_pct,
-
-                    "growth":
-                    latest.ram_pct
-                    - window[0].ram_pct,
-                },
+                AnomalyEvent(
+                    anomaly_type="MEMORY_LEAK",
+                    severity="HIGH",
+                    target_name=target_name,
+                    metric_value=latest.ram_pct,
+                    context={
+                        "start_ram": window[0].ram_pct,
+                        "end_ram": latest.ram_pct,
+                        "growth": latest.ram_pct - window[0].ram_pct,
+                    },
+                )
             )
-        )
 
         # ----------------------------------------------------------
         # SLOW RESPONSE
         # ----------------------------------------------------------
-
         if _all_above(
             window,
             "response_ms",
             thresholds.response_time_ms,
         ):
-
             latest = window[-1]
-
             events.append(
                 AnomalyEvent(
                     anomaly_type="SLOW_RESPONSE",
@@ -246,10 +239,8 @@ class Analyzer:
                     target_name=target_name,
                     metric_value=latest.response_ms,
                     context={
-                        "response_ms":
-                        latest.response_ms,
-                        "threshold":
-                        thresholds.response_time_ms,
+                        "response_ms": latest.response_ms,
+                        "threshold": thresholds.response_time_ms,
                     },
                 )
             )
@@ -257,57 +248,40 @@ class Analyzer:
         # ----------------------------------------------------------
         # HIGH ERROR RATE
         # ----------------------------------------------------------
-
         total_errors = sum(
             signal.error_count
             for signal in window
         )
 
-        if (
-            total_errors >=
-            thresholds.error_rate_per_window
-        ):
-
+        if total_errors >= thresholds.error_rate_per_window:
             events.append(
                 AnomalyEvent(
                     anomaly_type="HIGH_ERROR_RATE",
                     severity="HIGH",
                     target_name=target_name,
-                    metric_value=float(
-                        total_errors
-                    ),
+                    metric_value=float(total_errors),
                     context={
-                        "total_errors":
-                        total_errors
+                        "total_errors": total_errors,
+                        "threshold": thresholds.error_rate_per_window,
                     },
                 )
             )
 
         # ----------------------------------------------------------
-        # Deduplicate
+        # Deduplicate by anomaly type
         # ----------------------------------------------------------
-
-        unique_events = []
+        unique_events: List[AnomalyEvent] = []
         seen = set()
 
         for event in events:
-
             if event.anomaly_type not in seen:
-
-                seen.add(
-                    event.anomaly_type
-                )
-
-                unique_events.append(
-                    event
-                )
+                seen.add(event.anomaly_type)
+                unique_events.append(event)
 
         # ----------------------------------------------------------
         # Persist anomalies
         # ----------------------------------------------------------
-
         for event in unique_events:
-
             if self.kb.incident_exists(
                 event.target_name,
                 event.anomaly_type,
@@ -320,27 +294,17 @@ class Analyzer:
             )
 
             print(
-                f"[Analyzer] Detected "
-                f"{event.anomaly_type}",
+                f"[Analyzer] Detected {event.anomaly_type} "
+                f"on {event.target_name}",
                 flush=True,
             )
 
             self.kb.write_anomaly(
-                target_name=
-                event.target_name,
-
-                anomaly_type=
-                event.anomaly_type,
-
-                severity=
-                event.severity,
-
-                metric_value=
-                event.metric_value,
-
-                context=json.dumps(
-                    event.context
-                ),
+                target_name=event.target_name,
+                anomaly_type=event.anomaly_type,
+                severity=event.severity,
+                metric_value=event.metric_value,
+                context=json.dumps(event.context),
             )
 
         return unique_events

@@ -1,35 +1,41 @@
 from __future__ import annotations
 
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
-from typing import List, Optional
+from typing import Any, Dict, List, Optional
 
 import yaml
+
+from models import TargetType
 
 
 @dataclass
 class Target:
+    id: str
     name: str
 
-    # local | ssh | prometheus
-    type: str = "local"
+    # local | ssh | prometheus | docker
+    type: str = TargetType.LOCAL.value
 
-    # Local monitoring
+    # Common monitoring / verification
     health_url: str = ""
+    poll_interval_seconds: int = 10
+
+    # Local / Docker target
     log_path: str = ""
     container_name: str = ""
 
-    # Monitoring interval
-    poll_interval_seconds: int = 10
-
-    # SSH monitoring
+    # SSH target
     host: str = ""
     username: str = ""
     ssh_key: str = ""
 
-    # Prometheus monitoring
+    # Prometheus source
     prometheus_url: str = ""
+
+    # Future extensibility
+    metadata: Dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass
@@ -46,6 +52,7 @@ class Rule:
     anomaly_type: str
     actions: List[str]
     cooldown_minutes: int = 5
+    enabled: bool = True
 
 
 @dataclass
@@ -68,7 +75,7 @@ class AppConfig:
 
     def rule_for(self, anomaly_type: str) -> Optional[Rule]:
         for rule in self.rules:
-            if rule.anomaly_type == anomaly_type:
+            if rule.enabled and rule.anomaly_type == anomaly_type:
                 return rule
         return None
 
@@ -78,29 +85,50 @@ _CONFIG_PATH = Path(__file__).parent / "config.yaml"
 
 def load_config(path: Path = _CONFIG_PATH) -> AppConfig:
     with open(path, "r", encoding="utf-8") as f:
-        raw = yaml.safe_load(f)
+        raw = yaml.safe_load(f) or {}
 
-    targets = [Target(**t) for t in raw.get("targets", [])]
+    # -------- Targets --------
+    targets: List[Target] = []
+    for t in raw.get("targets", []):
+        target_data = dict(t)
+
+        # Backward compatibility: if id is missing, use name
+        if "id" not in target_data:
+            target_data["id"] = target_data.get("name", "unknown-target")
+
+        # Backward compatibility: metadata optional
+        if "metadata" not in target_data:
+            target_data["metadata"] = {}
+
+        targets.append(Target(**target_data))
+
+    # -------- Thresholds --------
     thresholds = Thresholds(**raw.get("thresholds", {}))
-    rules = [Rule(**r) for r in raw.get("rules", [])]
 
+    # -------- Rules --------
+    rules: List[Rule] = []
+    for r in raw.get("rules", []):
+        rule_data = dict(r)
+
+        # Backward compatibility: enabled optional
+        if "enabled" not in rule_data:
+            rule_data["enabled"] = True
+
+        rules.append(Rule(**rule_data))
+
+    # -------- Alerting --------
     al = raw.get("alerting", {})
 
     alerting = Alerting(
         slack_webhook_url=os.getenv("SLACK_WEBHOOK_URL")
         or al.get("slack_webhook_url", ""),
-
         smtp_host=os.getenv("SMTP_HOST")
         or al.get("smtp_host", ""),
-
         smtp_port=int(al.get("smtp_port", 587)),
-
         smtp_user=os.getenv("SMTP_USER")
         or al.get("smtp_user", ""),
-
         smtp_pass=os.getenv("SMTP_PASS")
         or al.get("smtp_pass", ""),
-
         alert_email_to=al.get("alert_email_to", ""),
     )
 
@@ -109,8 +137,5 @@ def load_config(path: Path = _CONFIG_PATH) -> AppConfig:
         thresholds=thresholds,
         rules=rules,
         alerting=alerting,
-        knowledge_db_path=raw.get(
-            "knowledge_db_path",
-            "knowledge.db",
-        ),
+        knowledge_db_path=raw.get("knowledge_db_path", "knowledge.db"),
     )

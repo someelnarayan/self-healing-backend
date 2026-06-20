@@ -14,18 +14,17 @@ import os
 import smtplib
 import time
 from email.mime.text import MIMEText
-from typing import Dict, Optional
+from typing import Callable, Dict, Optional
 
 import docker
 import httpx
 
-from config import AppConfig
+from config import AppConfig, Target
 from knowledge import KnowledgeBase
 from planner import ActionPlan
 
 
 class ActionResult:
-
     def __init__(
         self,
         success: bool,
@@ -37,22 +36,35 @@ class ActionResult:
         self.error = error
 
 
-def restart_service(
+# ------------------------------------------------------------
+# Helper
+# ------------------------------------------------------------
+
+def _get_target(
     target_name: str,
     config: AppConfig,
-) -> ActionResult:
-
-    start = time.time()
-
-    target = next(
+) -> Optional[Target]:
+    return next(
         (
             t
             for t in config.targets
-            if t.name == target_name
+            if t.name == target_name or t.id == target_name
         ),
         None,
     )
 
+
+# ------------------------------------------------------------
+# Recovery actions
+# ------------------------------------------------------------
+
+def restart_service(
+    target_name: str,
+    config: AppConfig,
+) -> ActionResult:
+    start = time.time()
+
+    target = _get_target(target_name, config)
     if not target:
         return ActionResult(
             False,
@@ -61,88 +73,63 @@ def restart_service(
         )
 
     try:
+        if not target.container_name:
+            return ActionResult(
+                False,
+                0,
+                f"Target {target_name} has no container_name configured",
+            )
 
         client = docker.from_env()
-
-        container = client.containers.get(
-            target.container_name
-        )
+        container = client.containers.get(target.container_name)
 
         print(
-            f"[Executor] Restarting container "
-            f"{target.container_name}",
+            f"[Executor] Restarting container {target.container_name}",
             flush=True,
         )
 
         container.restart()
 
-        for _ in range(30):
+        # Optional health verification
+        if target.health_url:
+            for _ in range(30):
+                time.sleep(1)
 
-            time.sleep(1)
-
-            try:
-
-                response = httpx.get(
-                    target.health_url,
-                    timeout=3,
-                )
-
-                if response.status_code == 200:
-
-                    duration = int(
-                        (time.time() - start)
-                        * 1000
+                try:
+                    response = httpx.get(
+                        target.health_url,
+                        timeout=3,
                     )
 
-                    return ActionResult(
-                        True,
-                        duration,
-                    )
+                    if response.status_code == 200:
+                        duration = int((time.time() - start) * 1000)
+                        return ActionResult(True, duration)
 
-            except Exception:
-                pass
+                except Exception:
+                    pass
 
-        duration = int(
-            (time.time() - start)
-            * 1000
-        )
+            duration = int((time.time() - start) * 1000)
+            return ActionResult(
+                False,
+                duration,
+                "Health endpoint did not recover after restart",
+            )
 
-        return ActionResult(
-            False,
-            duration,
-            "Health endpoint did not recover",
-        )
+        duration = int((time.time() - start) * 1000)
+        return ActionResult(True, duration)
 
     except Exception as e:
-
-        duration = int(
-            (time.time() - start)
-            * 1000
-        )
-
-        return ActionResult(
-            False,
-            duration,
-            str(e),
-        )
+        duration = int((time.time() - start) * 1000)
+        return ActionResult(False, duration, str(e))
 
 
 def retry_http_endpoint(
     target_name: str,
     config: AppConfig,
 ) -> ActionResult:
-
     start = time.time()
 
-    target = next(
-        (
-            t
-            for t in config.targets
-            if t.name == target_name
-        ),
-        None,
-    )
-
+    target = _get_target(target_name, config)
     if not target:
         return ActionResult(
             False,
@@ -150,28 +137,25 @@ def retry_http_endpoint(
             f"Unknown target: {target_name}",
         )
 
+    if not target.health_url:
+        return ActionResult(
+            False,
+            0,
+            f"Target {target_name} has no health_url configured",
+        )
+
     delay = 1
 
     for _ in range(3):
-
         try:
-
             response = httpx.get(
                 target.health_url,
                 timeout=5,
             )
 
             if response.status_code == 200:
-
-                duration = int(
-                    (time.time() - start)
-                    * 1000
-                )
-
-                return ActionResult(
-                    True,
-                    duration,
-                )
+                duration = int((time.time() - start) * 1000)
+                return ActionResult(True, duration)
 
         except Exception:
             pass
@@ -179,16 +163,8 @@ def retry_http_endpoint(
         time.sleep(delay)
         delay *= 2
 
-    duration = int(
-        (time.time() - start)
-        * 1000
-    )
-
-    return ActionResult(
-        False,
-        duration,
-        "Endpoint retry failed",
-    )
+    duration = int((time.time() - start) * 1000)
+    return ActionResult(False, duration, "Endpoint retry failed")
 
 
 def send_alert(
@@ -196,18 +172,13 @@ def send_alert(
     config: AppConfig,
     message: str = "",
 ) -> ActionResult:
-
     start = time.time()
-
     sent = False
 
     if config.alerting.slack_webhook_url:
-
         try:
-
             payload = {
-                "text":
-                f"[Self-Healer] {target_name}\n{message}"
+                "text": f"[Self-Healer] {target_name}\n{message}"
             }
 
             httpx.post(
@@ -215,47 +186,28 @@ def send_alert(
                 json=payload,
                 timeout=5,
             )
-
             sent = True
 
         except Exception as e:
-
             print(
                 f"[Executor] Slack alert failed: {e}",
                 flush=True,
             )
 
-    if (
-        config.alerting.smtp_host
-        and config.alerting.alert_email_to
-    ):
-
+    if config.alerting.smtp_host and config.alerting.alert_email_to:
         try:
-
             msg = MIMEText(message)
-
-            msg["Subject"] = (
-                f"[Self-Healer] Alert - "
-                f"{target_name}"
-            )
-
-            msg["From"] = (
-                config.alerting.smtp_user
-            )
-
-            msg["To"] = (
-                config.alerting.alert_email_to
-            )
+            msg["Subject"] = f"[Self-Healer] Alert - {target_name}"
+            msg["From"] = config.alerting.smtp_user
+            msg["To"] = config.alerting.alert_email_to
 
             with smtplib.SMTP(
                 config.alerting.smtp_host,
                 config.alerting.smtp_port,
             ) as server:
-
                 server.starttls()
 
                 if config.alerting.smtp_user:
-
                     server.login(
                         config.alerting.smtp_user,
                         config.alerting.smtp_pass,
@@ -266,46 +218,28 @@ def send_alert(
             sent = True
 
         except Exception as e:
-
             print(
                 f"[Executor] Email alert failed: {e}",
                 flush=True,
             )
 
     if not sent:
-
         print(
             f"[ALERT] {target_name}: {message}",
             flush=True,
         )
 
-    duration = int(
-        (time.time() - start)
-        * 1000
-    )
-
-    return ActionResult(
-        True,
-        duration,
-    )
+    duration = int((time.time() - start) * 1000)
+    return ActionResult(True, duration)
 
 
 def rotate_log(
     target_name: str,
     config: AppConfig,
 ) -> ActionResult:
-
     start = time.time()
 
-    target = next(
-        (
-            t
-            for t in config.targets
-            if t.name == target_name
-        ),
-        None,
-    )
-
+    target = _get_target(target_name, config)
     if not target:
         return ActionResult(
             False,
@@ -313,48 +247,28 @@ def rotate_log(
             f"Unknown target: {target_name}",
         )
 
-    try:
-
-        backup_file = (
-            f"{target.log_path}"
-            f".bak.{int(time.time())}"
-        )
-
-        os.rename(
-            target.log_path,
-            backup_file,
-        )
-
-        open(
-            target.log_path,
-            "w",
-        ).close()
-
-        duration = int(
-            (time.time() - start)
-            * 1000
-        )
-
-        return ActionResult(
-            True,
-            duration,
-        )
-
-    except Exception as e:
-
-        duration = int(
-            (time.time() - start)
-            * 1000
-        )
-
+    if not target.log_path:
         return ActionResult(
             False,
-            duration,
-            str(e),
+            0,
+            f"Target {target_name} has no log_path configured",
         )
 
+    try:
+        backup_file = f"{target.log_path}.bak.{int(time.time())}"
 
-ACTION_REGISTRY: Dict[str, callable] = {
+        os.rename(target.log_path, backup_file)
+        open(target.log_path, "w").close()
+
+        duration = int((time.time() - start) * 1000)
+        return ActionResult(True, duration)
+
+    except Exception as e:
+        duration = int((time.time() - start) * 1000)
+        return ActionResult(False, duration, str(e))
+
+
+ACTION_REGISTRY: Dict[str, Callable] = {
     "restart_service": restart_service,
     "retry_http_endpoint": retry_http_endpoint,
     "send_alert": send_alert,
@@ -362,8 +276,11 @@ ACTION_REGISTRY: Dict[str, callable] = {
 }
 
 
-class Executor:
+# ------------------------------------------------------------
+# Executor
+# ------------------------------------------------------------
 
+class Executor:
     def __init__(
         self,
         config: AppConfig,
@@ -377,8 +294,7 @@ class Executor:
         plan: ActionPlan,
     ) -> list[ActionResult]:
 
-        results = []
-
+        results: list[ActionResult] = []
         anomaly = plan.anomaly
 
         self.kb.update_incident_status(
@@ -395,49 +311,55 @@ class Executor:
             f"Context: {anomaly.context}"
         )
 
-        for action_name in plan.actions:
+        overall_success = True
 
-            action_fn = ACTION_REGISTRY.get(
-                action_name
-            )
+        for action_name in plan.actions:
+            action_fn = ACTION_REGISTRY.get(action_name)
 
             if not action_fn:
-
                 print(
-                    f"[Executor] Unknown action: "
-                    f"{action_name}",
+                    f"[Executor] Unknown action: {action_name}",
                     flush=True,
                 )
 
+                result = ActionResult(
+                    False,
+                    0,
+                    f"Unknown action: {action_name}",
+                )
+
+                self.kb.write_audit(
+                    target_name=anomaly.target_name,
+                    anomaly_type=anomaly.anomaly_type,
+                    action=action_name,
+                    success=False,
+                    duration_ms=0,
+                    error_msg=result.error,
+                )
+
+                results.append(result)
+                overall_success = False
                 continue
 
             print(
-                f"[Executor] Running "
-                f"{action_name} "
-                f"on "
-                f"{anomaly.target_name}",
+                f"[Executor] Running {action_name} on {anomaly.target_name}",
                 flush=True,
             )
 
             try:
-
                 if action_name == "send_alert":
-
                     result = action_fn(
                         anomaly.target_name,
                         self.config,
                         alert_message,
                     )
-
                 else:
-
                     result = action_fn(
                         anomaly.target_name,
                         self.config,
                     )
 
             except Exception as e:
-
                 result = ActionResult(
                     False,
                     0,
@@ -452,40 +374,51 @@ class Executor:
                 duration_ms=result.duration_ms,
                 error_msg=result.error,
             )
-            if result.success:
-
-                self.kb.update_incident_status(
-                    anomaly.target_name,
-                    anomaly.anomaly_type,
-                    "RESOLVED",
-                )
-
-                self.kb.resolve_incident(
-                    anomaly.target_name,
-                    anomaly.anomaly_type,
-                )
-
-                self.kb.set_cooldown(
-                    anomaly.target_name,
-                    30,
-                )
-
-            else:
-
-                self.kb.update_incident_status(
-                    anomaly.target_name,
-                    anomaly.anomaly_type,
-                    "FAILED",
-                )
 
             results.append(result)
 
+            if not result.success:
+                overall_success = False
+
             print(
-                f"[Executor] "
-                f"{action_name} -> "
+                f"[Executor] {action_name} -> "
                 f"{'SUCCESS' if result.success else 'FAILED'} "
                 f"({result.duration_ms} ms)",
                 flush=True,
+            )
+
+        # --------------------------------------------------------
+        # Final incident / cooldown handling happens AFTER all actions
+        # --------------------------------------------------------
+        if overall_success:
+            self.kb.update_incident_status(
+                anomaly.target_name,
+                anomaly.anomaly_type,
+                "RESOLVED",
+            )
+
+            self.kb.resolve_incident(
+                anomaly.target_name,
+                anomaly.anomaly_type,
+            )
+
+            cooldown_key = plan.metadata.get(
+                "cooldown_key",
+                f"{anomaly.target_name}:{anomaly.anomaly_type}",
+            )
+
+            cooldown_seconds = max(1, plan.cooldown_minutes * 60)
+
+            self.kb.set_cooldown(
+                cooldown_key,
+                cooldown_seconds,
+            )
+
+        else:
+            self.kb.update_incident_status(
+                anomaly.target_name,
+                anomaly.anomaly_type,
+                "FAILED",
             )
 
         return results
