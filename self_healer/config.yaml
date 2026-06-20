@@ -17,7 +17,7 @@ targets:
   - name: prom-local
     type: prometheus
 
-    prometheus_url: http://localhost:9090
+    prometheus_url: http://prometheus:9090
 
 
 thresholds:

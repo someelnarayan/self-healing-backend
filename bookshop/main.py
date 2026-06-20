@@ -8,6 +8,7 @@ from pathlib import Path
 import uvicorn
 from fastapi import FastAPI
 from fastapi.responses import StreamingResponse
+from prometheus_fastapi_instrumentator import Instrumentator
 
 # ── Logging ───────────────────────────────────────
 LOG_DIR = Path("/var/log/bookshop")
@@ -25,6 +26,9 @@ logging.basicConfig(
 logger = logging.getLogger("bookshop")
 
 app = FastAPI(title="Bookshop", version="1.0.0")
+
+# Expose Prometheus metrics at /metrics
+Instrumentator().instrument(app).expose(app)
 
 _leak_bucket = []
 

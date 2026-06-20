@@ -10,6 +10,24 @@ services:
       - ./logs:/var/log/bookshop
     restart: "no"
 
+  prometheus:
+    image: prom/prometheus
+    container_name: prometheus
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
+    depends_on:
+      - node-exporter
+    restart: "no"
+
+  node-exporter:
+    image: prom/node-exporter
+    container_name: node-exporter
+    ports:
+      - "9100:9100"
+    restart: "no"
+
   healer:
     build: ./self_healer
     container_name: healer
@@ -24,6 +42,7 @@ services:
     command: uvicorn main:app --host 0.0.0.0 --port 8000 --reload
     depends_on:
       - bookshop
+      - prometheus
     environment:
       - SLACK_WEBHOOK_URL=${SLACK_WEBHOOK_URL:-}
       - SMTP_HOST=${SMTP_HOST:-}
