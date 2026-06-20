@@ -1,5 +1,3 @@
-version: "3.9"
-
 services:
   bookshop:
     build: ./bookshop
@@ -19,6 +17,7 @@ services:
       - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
     depends_on:
       - node-exporter
+      - bookshop
     restart: "no"
 
   node-exporter:
@@ -48,4 +47,16 @@ services:
       - SMTP_HOST=${SMTP_HOST:-}
       - SMTP_USER=${SMTP_USER:-}
       - SMTP_PASS=${SMTP_PASS:-}
+    restart: "no"
+
+  dashboard:
+    build: ./dashboard
+    container_name: dashboard
+    ports:
+      - "3000:3000"
+    volumes:
+      - ./dashboard:/app
+      - /app/node_modules
+    depends_on:
+      - healer
     restart: "no"
