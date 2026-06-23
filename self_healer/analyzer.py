@@ -126,6 +126,36 @@ class Analyzer:
             return []
 
         events: List[AnomalyEvent] = []
+        latest = window[-1]
+
+        # Resolve the actual Target object so analyzer can make
+        # target-aware decisions (SSH vs local vs prometheus)
+        target = self.config.get_target(target_name)
+
+        # ----------------------------------------------------------
+        # SSH PROCESS DOWN (NEW)
+        # If the monitored SSH demo process is not running,
+        # create PROCESS_DOWN anomaly immediately.
+        # ----------------------------------------------------------
+        if (
+            target is not None
+            and target.is_ssh
+            and target.process_name
+            and not latest.process_running
+        ):
+            events.append(
+                AnomalyEvent(
+                    anomaly_type="PROCESS_DOWN",
+                    severity="CRITICAL",
+                    target_name=target_name,
+                    metric_value=0.0,
+                    context={
+                        "process_name": target.process_name,
+                        "process_running": latest.process_running,
+                        "host": target.host,
+                    },
+                )
+            )
 
         # ----------------------------------------------------------
         # HEALTH CHECK FAILURE
@@ -166,7 +196,6 @@ class Analyzer:
             "cpu_pct",
             thresholds.cpu_percent,
         ):
-            latest = window[-1]
             events.append(
                 AnomalyEvent(
                     anomaly_type="HIGH_CPU",
@@ -189,7 +218,6 @@ class Analyzer:
             "ram_pct",
             thresholds.ram_percent,
         ):
-            latest = window[-1]
             events.append(
                 AnomalyEvent(
                     anomaly_type="HIGH_RAM",
@@ -208,7 +236,6 @@ class Analyzer:
         # Detect steady RAM growth across the window
         # ----------------------------------------------------------
         if _memory_leak_trend(window):
-            latest = window[-1]
             events.append(
                 AnomalyEvent(
                     anomaly_type="MEMORY_LEAK",
@@ -231,7 +258,6 @@ class Analyzer:
             "response_ms",
             thresholds.response_time_ms,
         ):
-            latest = window[-1]
             events.append(
                 AnomalyEvent(
                     anomaly_type="SLOW_RESPONSE",
