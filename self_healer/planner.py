@@ -28,7 +28,7 @@ class ActionPlan:
     dry_run: bool = False
     skip_reason: Optional[str] = None
 
-    # Added for richer planning / later playbook support
+    # richer planning metadata
     cooldown_minutes: int = 0
     rule_name: str = ""
     metadata: dict = field(default_factory=dict)
@@ -56,8 +56,11 @@ class Planner:
         anomaly: AnomalyEvent,
     ) -> str:
         """
-        Use a per-target-per-anomaly cooldown key instead of only target-level cooldown.
-        This avoids one anomaly blocking every other anomaly on the same target.
+        Use per-target-per-anomaly cooldown instead of target-level cooldown.
+        Example:
+            ssh-test:PROCESS_DOWN
+            ssh-test:HIGH_CPU
+            bookshop:HEALTH_CHECK_FAIL
         """
         return f"{anomaly.target_name}:{anomaly.anomaly_type}"
 
@@ -70,30 +73,40 @@ class Planner:
 
         if not rule:
             print(
-                f"[Planner] No rule found for "
-                f"{anomaly.anomaly_type}",
+                f"[Planner] No rule found for {anomaly.anomaly_type}",
                 flush=True,
             )
             return None
 
         cooldown_key = self._cooldown_key(anomaly)
 
+        # ------------------------------------------------------
+        # Cooldown handling
+        # ------------------------------------------------------
         if self.kb.is_on_cooldown(cooldown_key):
-            remaining = self.kb.get_cooldown_remaining(cooldown_key)
+            remaining = self.kb.get_cooldown_remaining(
+                cooldown_key
+            )
 
             print(
-                f"[Planner] Cooldown active for "
-                f"{cooldown_key} "
+                f"[Planner] Cooldown active for {cooldown_key} "
                 f"({remaining}s remaining)",
                 flush=True,
             )
 
-            # During cooldown, downgrade to alert-only if possible
+            # During cooldown, downgrade to alert-only if possible.
             cooldown_actions = (
                 ["send_alert"]
                 if "send_alert" in rule.actions
                 else []
             )
+
+            if not cooldown_actions:
+                print(
+                    f"[Planner] No alert action available during cooldown "
+                    f"for {cooldown_key}; returning no-op plan",
+                    flush=True,
+                )
 
             return ActionPlan(
                 anomaly=anomaly,
@@ -108,9 +121,13 @@ class Planner:
                 metadata={
                     "cooldown_key": cooldown_key,
                     "cooldown_remaining_seconds": remaining,
+                    "cooldown_mode": True,
                 },
             )
 
+        # ------------------------------------------------------
+        # Normal action plan
+        # ------------------------------------------------------
         print(
             f"[Planner] Selected actions {rule.actions} "
             f"for anomaly {anomaly.anomaly_type} "
@@ -129,5 +146,6 @@ class Planner:
                 "target_name": anomaly.target_name,
                 "anomaly_type": anomaly.anomaly_type,
                 "severity": anomaly.severity,
+                "cooldown_mode": False,
             },
         )

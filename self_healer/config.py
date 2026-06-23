@@ -31,10 +31,18 @@ class Target:
     username: str = ""
     ssh_key: str = ""
 
+    # SSH demo-lab operational fields
+    process_name: str = ""
+    restart_command: str = ""
+    cleanup_command: str = ""
+    kill_command: str = ""
+    tmp_dir: str = ""
+    demo_base_dir: str = ""
+
     # Prometheus source
     prometheus_url: str = ""
 
-    # Extensible metadata for target-specific behavior
+    # Extra descriptive metadata only
     metadata: Dict[str, Any] = field(default_factory=dict)
 
     # ---------------------------------------------------------
@@ -54,42 +62,12 @@ class Target:
         return self.type == TargetType.PROMETHEUS.value
 
     # ---------------------------------------------------------
-    # SSH demo-lab metadata helpers
-    # These read from metadata so the rest of the code does not
-    # have to repeatedly do target.metadata.get(...)
+    # Optional descriptive metadata helpers
     # ---------------------------------------------------------
 
     @property
     def service_kind(self) -> str:
         return self.metadata.get("service_kind", "")
-
-    @property
-    def demo_base_dir(self) -> str:
-        return self.metadata.get("demo_base_dir", "")
-
-    @property
-    def process_name(self) -> str:
-        return self.metadata.get("process_name", "")
-
-    @property
-    def restart_command(self) -> str:
-        return self.metadata.get("restart_command", "")
-
-    @property
-    def cleanup_command(self) -> str:
-        return self.metadata.get("cleanup_command", "")
-
-    @property
-    def kill_command(self) -> str:
-        return self.metadata.get("kill_command", "")
-
-    @property
-    def metadata_log_path(self) -> str:
-        return self.metadata.get("log_path", "")
-
-    @property
-    def tmp_dir(self) -> str:
-        return self.metadata.get("tmp_dir", "")
 
 
 @dataclass
@@ -155,14 +133,28 @@ def load_config(path: Path = _CONFIG_PATH) -> AppConfig:
     for t in raw.get("targets", []):
         target_data = dict(t)
 
-        # Backward compatibility:
-        # if id is missing, use name
+        # Backward compatibility: if id is missing, use name
         if "id" not in target_data:
             target_data["id"] = target_data.get("name", "unknown-target")
 
         # metadata should always exist
         if "metadata" not in target_data:
             target_data["metadata"] = {}
+
+        # Backward compatibility for older YAML where SSH demo fields
+        # were stored under metadata instead of top-level target fields.
+        md = target_data.get("metadata", {})
+
+        target_data.setdefault("process_name", md.get("process_name", ""))
+        target_data.setdefault("restart_command", md.get("restart_command", ""))
+        target_data.setdefault("cleanup_command", md.get("cleanup_command", ""))
+        target_data.setdefault("kill_command", md.get("kill_command", ""))
+        target_data.setdefault("tmp_dir", md.get("tmp_dir", ""))
+        target_data.setdefault("demo_base_dir", md.get("demo_base_dir", ""))
+
+        # If top-level log_path is missing, allow fallback from metadata
+        if not target_data.get("log_path"):
+            target_data["log_path"] = md.get("log_path", "")
 
         targets.append(Target(**target_data))
 
@@ -179,8 +171,7 @@ def load_config(path: Path = _CONFIG_PATH) -> AppConfig:
     for r in raw.get("rules", []):
         rule_data = dict(r)
 
-        # Backward compatibility:
-        # enabled defaults to True
+        # Backward compatibility: enabled defaults to True
         if "enabled" not in rule_data:
             rule_data["enabled"] = True
 

@@ -85,8 +85,6 @@ def _ssh_run_command(
             x for x in [out, err] if x
         ).strip()
 
-        # If stderr has content, we still don’t blindly fail,
-        # but usually for our scripts success is reflected by exit status.
         exit_code = stdout.channel.recv_exit_status()
 
         return exit_code == 0, combined
@@ -311,8 +309,7 @@ def rotate_log(
             f"Unknown target: {target_name}",
         )
 
-    # Prefer target.log_path; if empty, fall back to metadata log path
-    log_path = target.log_path or target.metadata_log_path
+    log_path = target.log_path
 
     if not log_path:
         return ActionResult(
@@ -389,8 +386,7 @@ def restart_process(
             output or "restart_process failed",
         )
 
-    # Optional lightweight verification:
-    # confirm the process appears after restart
+    # Optional verification
     if target.process_name:
         verify_cmd = (
             f"pgrep -f '{target.process_name}' >/dev/null && "
@@ -606,8 +602,10 @@ class Executor:
                 anomaly.anomaly_type,
             )
 
-            # Cooldown key can be target-specific if you extend planner later.
-            cooldown_key = f"{anomaly.target_name}:{anomaly.anomaly_type}"
+            cooldown_key = plan.metadata.get(
+                "cooldown_key",
+                f"{anomaly.target_name}:{anomaly.anomaly_type}",
+            )
 
             rule = self.config.rule_for(anomaly.anomaly_type)
             cooldown_minutes = rule.cooldown_minutes if rule else 1
