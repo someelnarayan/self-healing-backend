@@ -34,8 +34,62 @@ class Target:
     # Prometheus source
     prometheus_url: str = ""
 
-    # Future extensibility
+    # Extensible metadata for target-specific behavior
     metadata: Dict[str, Any] = field(default_factory=dict)
+
+    # ---------------------------------------------------------
+    # Convenience helpers for target type
+    # ---------------------------------------------------------
+
+    @property
+    def is_local(self) -> bool:
+        return self.type == TargetType.LOCAL.value
+
+    @property
+    def is_ssh(self) -> bool:
+        return self.type == TargetType.SSH.value
+
+    @property
+    def is_prometheus(self) -> bool:
+        return self.type == TargetType.PROMETHEUS.value
+
+    # ---------------------------------------------------------
+    # SSH demo-lab metadata helpers
+    # These read from metadata so the rest of the code does not
+    # have to repeatedly do target.metadata.get(...)
+    # ---------------------------------------------------------
+
+    @property
+    def service_kind(self) -> str:
+        return self.metadata.get("service_kind", "")
+
+    @property
+    def demo_base_dir(self) -> str:
+        return self.metadata.get("demo_base_dir", "")
+
+    @property
+    def process_name(self) -> str:
+        return self.metadata.get("process_name", "")
+
+    @property
+    def restart_command(self) -> str:
+        return self.metadata.get("restart_command", "")
+
+    @property
+    def cleanup_command(self) -> str:
+        return self.metadata.get("cleanup_command", "")
+
+    @property
+    def kill_command(self) -> str:
+        return self.metadata.get("kill_command", "")
+
+    @property
+    def metadata_log_path(self) -> str:
+        return self.metadata.get("log_path", "")
+
+    @property
+    def tmp_dir(self) -> str:
+        return self.metadata.get("tmp_dir", "")
 
 
 @dataclass
@@ -79,6 +133,12 @@ class AppConfig:
                 return rule
         return None
 
+    def get_target(self, target_name: str) -> Optional[Target]:
+        for target in self.targets:
+            if target.name == target_name or target.id == target_name:
+                return target
+        return None
+
 
 _CONFIG_PATH = Path(__file__).parent / "config.yaml"
 
@@ -87,36 +147,48 @@ def load_config(path: Path = _CONFIG_PATH) -> AppConfig:
     with open(path, "r", encoding="utf-8") as f:
         raw = yaml.safe_load(f) or {}
 
-    # -------- Targets --------
+    # ---------------------------------------------------------
+    # Targets
+    # ---------------------------------------------------------
     targets: List[Target] = []
+
     for t in raw.get("targets", []):
         target_data = dict(t)
 
-        # Backward compatibility: if id is missing, use name
+        # Backward compatibility:
+        # if id is missing, use name
         if "id" not in target_data:
             target_data["id"] = target_data.get("name", "unknown-target")
 
-        # Backward compatibility: metadata optional
+        # metadata should always exist
         if "metadata" not in target_data:
             target_data["metadata"] = {}
 
         targets.append(Target(**target_data))
 
-    # -------- Thresholds --------
+    # ---------------------------------------------------------
+    # Thresholds
+    # ---------------------------------------------------------
     thresholds = Thresholds(**raw.get("thresholds", {}))
 
-    # -------- Rules --------
+    # ---------------------------------------------------------
+    # Rules
+    # ---------------------------------------------------------
     rules: List[Rule] = []
+
     for r in raw.get("rules", []):
         rule_data = dict(r)
 
-        # Backward compatibility: enabled optional
+        # Backward compatibility:
+        # enabled defaults to True
         if "enabled" not in rule_data:
             rule_data["enabled"] = True
 
         rules.append(Rule(**rule_data))
 
-    # -------- Alerting --------
+    # ---------------------------------------------------------
+    # Alerting
+    # ---------------------------------------------------------
     al = raw.get("alerting", {})
 
     alerting = Alerting(

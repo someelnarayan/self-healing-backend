@@ -18,7 +18,7 @@ import threading
 from collections import deque
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Deque, Dict, Optional
+from typing import Deque, Dict
 
 from config import AppConfig, Target
 from knowledge import KnowledgeBase
@@ -41,10 +41,13 @@ class Signal:
     health_ok: bool = True
     error_count: int = 0
 
-    # richer signal fields for future anomaly detection
+    # richer signal fields for anomaly detection / observability
     memory_mb: float = 0.0
     disk_pct: float = 0.0
     ssh_status: str = "unknown"
+
+    # NEW: for SSH demo process monitoring
+    process_running: bool = True
 
 
 # ------------------------------------------------------------------
@@ -89,7 +92,7 @@ class Monitor:
         self.config = config
         self.kb = kb
 
-        # Use target.id as the stable internal key
+        # Use target.id as stable internal key
         self._states: Dict[str, TargetState] = {
             target.id: TargetState(target)
             for target in config.targets
@@ -123,7 +126,9 @@ class Monitor:
             if target.name == target_name:
                 return self._states[target.id]
 
-        raise KeyError(f"Unknown target ring requested: {target_name}")
+        raise KeyError(
+            f"Unknown target ring requested: {target_name}"
+        )
 
     def poll_once(
         self,
@@ -145,6 +150,9 @@ class Monitor:
         disk_pct = metrics.get("disk_pct", 0.0)
         ssh_status = metrics.get("ssh_status", "unknown")
 
+        # NEW: process-level health for SSH demo target
+        process_running = metrics.get("process_running", True)
+
         signal = Signal(
             ts=datetime.utcnow(),
             target_name=target.name,
@@ -157,6 +165,7 @@ class Monitor:
             memory_mb=memory_mb,
             disk_pct=disk_pct,
             ssh_status=ssh_status,
+            process_running=process_running,
         )
 
         print(
@@ -168,12 +177,16 @@ class Monitor:
             f"memory={memory_mb}MB | "
             f"disk={disk_pct}% | "
             f"ssh={ssh_status} | "
+            f"process_running={process_running} | "
             f"errors={error_count}",
             flush=True,
         )
 
         state.push(signal)
 
+        # Keep DB write backward-compatible.
+        # We are not forcing process_running into the DB yet because
+        # your current knowledge schema may not have that column.
         self.kb.write_signal(
             target_name=target.name,
             cpu_pct=cpu_pct,
