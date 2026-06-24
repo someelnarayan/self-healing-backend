@@ -123,7 +123,8 @@ def _control_loop():
                         )
                         continue
 
-                    if plan.skip_reason:
+                    # If planner intentionally skipped, log it but do not execute
+                    if plan.skip_reason and not plan.actions:
                         print(
                             f"[Planner] Skipping execution for "
                             f"{ev.anomaly_type} on {ev.target_name}: "
@@ -151,15 +152,29 @@ def _control_loop():
                     # --------------------------------------------------
                     # 4) Execute
                     # --------------------------------------------------
-                    executor.execute(plan)
+                    if plan.actions:
+                        executor.execute(plan)
+                    else:
+                        print(
+                            f"[Executor] No executable actions for "
+                            f"{ev.target_name} / {ev.anomaly_type}",
+                            flush=True,
+                        )
 
                     # --------------------------------------------------
                     # 5) Set cooldown using planner's anomaly-specific key
+                    #    Only for normal plans, not cooldown-mode alert-only plans
                     # --------------------------------------------------
                     cooldown_key = plan.metadata.get("cooldown_key", "")
                     cooldown_minutes = plan.cooldown_minutes or 0
+                    cooldown_mode = plan.metadata.get("cooldown_mode", False)
 
-                    if cooldown_key and cooldown_minutes > 0:
+                    if (
+                        plan.actions
+                        and cooldown_key
+                        and cooldown_minutes > 0
+                        and not cooldown_mode
+                    ):
                         kb.set_cooldown(
                             cooldown_key,
                             cooldown_minutes * 60,
@@ -180,6 +195,7 @@ def _control_loop():
                             "actions": plan.actions,
                             "cooldown_key": cooldown_key,
                             "cooldown_minutes": cooldown_minutes,
+                            "cooldown_mode": cooldown_mode,
                         },
                     )
 
@@ -256,21 +272,11 @@ def status():
 
 @app.get("/signals")
 def signals(limit: int = 100, target: str | None = None):
-    """
-    Returns recent signal_log entries (newest first).
-    Used by the Signals page and Live Metrics charts.
-    """
     return kb.get_signals(limit=limit, target_name=target)
 
 
 @app.get("/anomalies")
 def anomalies(limit: int = 100, target: str | None = None):
-    """
-    Returns recent anomaly_log entries (newest first), reshaped for UI.
-
-    status = resolved if at least one successful audit_log row exists
-    for the same target + anomaly_type, else open.
-    """
     raw = kb.get_anomalies(limit=limit, target_name=target)
     audits = kb.get_audit(limit=500)
 
@@ -301,9 +307,6 @@ def anomalies(limit: int = 100, target: str | None = None):
 
 @app.get("/audit")
 def audit(limit: int = 100, target: str | None = None):
-    """
-    Returns recent audit_log entries (newest first), reshaped for UI.
-    """
     raw = kb.get_audit(limit=limit, target_name=target)
 
     return [
@@ -327,10 +330,6 @@ def audit(limit: int = 100, target: str | None = None):
 
 @app.get("/recovery")
 def recovery():
-    """
-    Show cooldown status per target + anomaly rule.
-    This is more accurate than target-only cooldown now.
-    """
     rows = []
 
     for target in config.targets:
