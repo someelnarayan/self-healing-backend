@@ -45,10 +45,6 @@ class Target:
     # Extra descriptive metadata only
     metadata: Dict[str, Any] = field(default_factory=dict)
 
-    # ---------------------------------------------------------
-    # Convenience helpers for target type
-    # ---------------------------------------------------------
-
     @property
     def is_local(self) -> bool:
         return self.type == TargetType.LOCAL.value
@@ -60,10 +56,6 @@ class Target:
     @property
     def is_prometheus(self) -> bool:
         return self.type == TargetType.PROMETHEUS.value
-
-    # ---------------------------------------------------------
-    # Optional descriptive metadata helpers
-    # ---------------------------------------------------------
 
     @property
     def service_kind(self) -> str:
@@ -133,18 +125,15 @@ def load_config(path: Path = _CONFIG_PATH) -> AppConfig:
     for t in raw.get("targets", []):
         target_data = dict(t)
 
-        # Backward compatibility: if id is missing, use name
         if "id" not in target_data:
             target_data["id"] = target_data.get("name", "unknown-target")
 
-        # metadata should always exist
         if "metadata" not in target_data:
             target_data["metadata"] = {}
 
-        # Backward compatibility for older YAML where SSH demo fields
-        # were stored under metadata instead of top-level target fields.
         md = target_data.get("metadata", {})
 
+        # Backward compatibility for older YAML layouts
         target_data.setdefault("process_name", md.get("process_name", ""))
         target_data.setdefault("restart_command", md.get("restart_command", ""))
         target_data.setdefault("cleanup_command", md.get("cleanup_command", ""))
@@ -152,7 +141,6 @@ def load_config(path: Path = _CONFIG_PATH) -> AppConfig:
         target_data.setdefault("tmp_dir", md.get("tmp_dir", ""))
         target_data.setdefault("demo_base_dir", md.get("demo_base_dir", ""))
 
-        # If top-level log_path is missing, allow fallback from metadata
         if not target_data.get("log_path"):
             target_data["log_path"] = md.get("log_path", "")
 
@@ -167,14 +155,10 @@ def load_config(path: Path = _CONFIG_PATH) -> AppConfig:
     # Rules
     # ---------------------------------------------------------
     rules: List[Rule] = []
-
     for r in raw.get("rules", []):
         rule_data = dict(r)
-
-        # Backward compatibility: enabled defaults to True
         if "enabled" not in rule_data:
             rule_data["enabled"] = True
-
         rules.append(Rule(**rule_data))
 
     # ---------------------------------------------------------

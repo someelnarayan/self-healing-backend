@@ -9,6 +9,7 @@ from pathlib import Path
 
 import uvicorn
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, StreamingResponse
 
 from analyzer import Analyzer
@@ -17,7 +18,6 @@ from executor import Executor
 from knowledge import KnowledgeBase
 from monitor import Monitor
 from planner import Planner
-from fastapi.middleware.cors import CORSMiddleware
 
 CONFIG_PATH = Path(__file__).parent / "config.yaml"
 
@@ -36,6 +36,7 @@ app = FastAPI(
     title="Self-Healing Backend System",
     version="1.0.0",
 )
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -44,8 +45,32 @@ app.add_middleware(
 )
 
 
+# -------------------------------------------------------------------
+# Helpers
+# -------------------------------------------------------------------
+
+def _event_put(event_type: str, data: dict):
+    try:
+        _event_queue.put_nowait(
+            {
+                "type": event_type,
+                "data": data,
+            }
+        )
+    except queue.Full:
+        pass
+
+
+# -------------------------------------------------------------------
+# Main control loop
+# -------------------------------------------------------------------
+
 def _control_loop():
     print("[Main] Control loop started", flush=True)
+
+    if not config.targets:
+        print("[Main] No targets configured", flush=True)
+        return
 
     poll_interval = min(
         target.poll_interval_seconds
@@ -60,60 +85,124 @@ def _control_loop():
                     flush=True,
                 )
 
+                # --------------------------------------------------
+                # 1) Monitor
+                # --------------------------------------------------
                 monitor.poll_once(target)
 
+                # --------------------------------------------------
+                # 2) Analyze
+                # --------------------------------------------------
                 events = analyzer.analyze(target.name)
 
+                if not events:
+                    continue
+
+                # --------------------------------------------------
+                # 3) Plan + Execute for each anomaly
+                # --------------------------------------------------
                 for ev in events:
                     print(
-                        f"[Analyzer] Event detected: "
-                        f"{ev.anomaly_type}",
+                        f"[Analyzer] Event detected: {ev.anomaly_type} "
+                        f"on {ev.target_name}",
                         flush=True,
                     )
 
-                    if kb.is_on_cooldown(target.name):
+                    _event_put(
+                        "anomaly",
+                        ev.to_dict(),
+                    )
+
+                    plan = planner.plan(ev)
+
+                    if not plan:
                         print(
-                            f"[Cooldown] "
-                            f"{target.name} is on cooldown",
+                            f"[Planner] No plan produced for "
+                            f"{ev.anomaly_type} on {ev.target_name}",
                             flush=True,
                         )
                         continue
 
-                    plan = planner.plan(ev)
-
-                    if plan:
+                    if plan.skip_reason:
                         print(
-                            f"[Planner] Actions: "
-                            f"{plan.actions}",
+                            f"[Planner] Skipping execution for "
+                            f"{ev.anomaly_type} on {ev.target_name}: "
+                            f"{plan.skip_reason}",
                             flush=True,
                         )
 
-                        executor.execute(plan)
-
-                        kb.set_cooldown(
-                            target.name,
-                            30,
-                        )
-
-                    try:
-                        _event_queue.put_nowait(
+                        _event_put(
+                            "plan_skipped",
                             {
-                                "type": "anomaly",
-                                "data": ev.to_dict(),
-                            }
+                                "target_name": ev.target_name,
+                                "anomaly_type": ev.anomaly_type,
+                                "skip_reason": plan.skip_reason,
+                                "actions": plan.actions,
+                            },
                         )
-                    except queue.Full:
-                        pass
+                        continue
+
+                    print(
+                        f"[Planner] Actions for {ev.target_name} / "
+                        f"{ev.anomaly_type}: {plan.actions}",
+                        flush=True,
+                    )
+
+                    # --------------------------------------------------
+                    # 4) Execute
+                    # --------------------------------------------------
+                    executor.execute(plan)
+
+                    # --------------------------------------------------
+                    # 5) Set cooldown using planner's anomaly-specific key
+                    # --------------------------------------------------
+                    cooldown_key = plan.metadata.get("cooldown_key", "")
+                    cooldown_minutes = plan.cooldown_minutes or 0
+
+                    if cooldown_key and cooldown_minutes > 0:
+                        kb.set_cooldown(
+                            cooldown_key,
+                            cooldown_minutes * 60,
+                        )
+
+                        print(
+                            f"[Cooldown] Set cooldown for "
+                            f"{cooldown_key} "
+                            f"({cooldown_minutes} min)",
+                            flush=True,
+                        )
+
+                    _event_put(
+                        "plan_executed",
+                        {
+                            "target_name": ev.target_name,
+                            "anomaly_type": ev.anomaly_type,
+                            "actions": plan.actions,
+                            "cooldown_key": cooldown_key,
+                            "cooldown_minutes": cooldown_minutes,
+                        },
+                    )
 
             except Exception as e:
                 print(
-                    f"[ERROR] "
-                    f"{target.name}: {e}",
+                    f"[ERROR] {target.name}: {e}",
                     flush=True,
+                )
+
+                _event_put(
+                    "loop_error",
+                    {
+                        "target_name": target.name,
+                        "error": str(e),
+                    },
                 )
 
         time.sleep(poll_interval)
 
+
+# -------------------------------------------------------------------
+# Startup
+# -------------------------------------------------------------------
 
 @app.on_event("startup")
 def startup():
@@ -127,9 +216,12 @@ def startup():
         daemon=True,
         name="control-loop",
     )
-
     thread.start()
 
+
+# -------------------------------------------------------------------
+# Basic health / targets
+# -------------------------------------------------------------------
 
 @app.get("/health")
 def healer_health():
@@ -137,10 +229,13 @@ def healer_health():
         "status": "ok",
         "service": "self-healer",
     }
+
+
 @app.get("/targets")
 def targets():
     return [
         {
+            "id": t.id,
             "name": t.name,
             "type": t.type,
         }
@@ -155,6 +250,10 @@ def status():
     }
 
 
+# -------------------------------------------------------------------
+# Signals / anomalies / audit
+# -------------------------------------------------------------------
+
 @app.get("/signals")
 def signals(limit: int = 100, target: str | None = None):
     """
@@ -167,13 +266,10 @@ def signals(limit: int = 100, target: str | None = None):
 @app.get("/anomalies")
 def anomalies(limit: int = 100, target: str | None = None):
     """
-    Returns recent anomaly_log entries (newest first), reshaped to
-    match the React AnomalyTable component's expected fields:
-        timestamp, type, service, severity, status
+    Returns recent anomaly_log entries (newest first), reshaped for UI.
 
-    `status` is derived: an anomaly is "resolved" if at least one
-    audit_log entry exists for the same target + anomaly_type with
-    success = true, otherwise it is "open".
+    status = resolved if at least one successful audit_log row exists
+    for the same target + anomaly_type, else open.
     """
     raw = kb.get_anomalies(limit=limit, target_name=target)
     audits = kb.get_audit(limit=500)
@@ -206,9 +302,7 @@ def anomalies(limit: int = 100, target: str | None = None):
 @app.get("/audit")
 def audit(limit: int = 100, target: str | None = None):
     """
-    Returns recent audit_log entries (newest first), reshaped to
-    match the React AuditTable component's expected fields:
-        timestamp, action, target, result
+    Returns recent audit_log entries (newest first), reshaped for UI.
     """
     raw = kb.get_audit(limit=limit, target_name=target)
 
@@ -227,38 +321,45 @@ def audit(limit: int = 100, target: str | None = None):
     ]
 
 
+# -------------------------------------------------------------------
+# Recovery / cooldown status
+# -------------------------------------------------------------------
+
 @app.get("/recovery")
 def recovery():
     """
-    Returns cooldown status for every configured target.
-    Used by the Recovery page to show which services are
-    currently blocked from re-triggering a recovery action.
+    Show cooldown status per target + anomaly rule.
+    This is more accurate than target-only cooldown now.
     """
-    return [
-        {
-            "target": t.name,
-            "on_cooldown": kb.is_on_cooldown(t.name),
-            "cooldown_remaining": kb.get_cooldown_remaining(t.name),
-        }
-        for t in config.targets
-    ]
+    rows = []
+
+    for target in config.targets:
+        for rule in config.rules:
+            cooldown_key = f"{target.name}:{rule.anomaly_type}"
+
+            rows.append(
+                {
+                    "target": target.name,
+                    "anomaly_type": rule.anomaly_type,
+                    "on_cooldown": kb.is_on_cooldown(cooldown_key),
+                    "cooldown_remaining": kb.get_cooldown_remaining(cooldown_key),
+                }
+            )
+
+    return rows
 
 
-
+# -------------------------------------------------------------------
+# Event stream
+# -------------------------------------------------------------------
 
 @app.get("/stream")
 async def stream():
-
     async def event_generator():
         while True:
             try:
                 event = _event_queue.get_nowait()
-
-                yield (
-                    f"data: "
-                    f"{json.dumps(event)}\n\n"
-                )
-
+                yield f"data: {json.dumps(event)}\n\n"
             except queue.Empty:
                 yield ": heartbeat\n\n"
                 await asyncio.sleep(1)
@@ -268,6 +369,10 @@ async def stream():
         media_type="text/event-stream",
     )
 
+
+# -------------------------------------------------------------------
+# Tiny HTML landing page
+# -------------------------------------------------------------------
 
 @app.get("/", response_class=HTMLResponse)
 def dashboard():
@@ -283,6 +388,7 @@ def dashboard():
             <ul>
                 <li><a href="/health">Health</a></li>
                 <li><a href="/status">Status</a></li>
+                <li><a href="/targets">Targets</a></li>
                 <li><a href="/signals">Signals</a></li>
                 <li><a href="/anomalies">Anomalies</a></li>
                 <li><a href="/audit">Audit</a></li>
@@ -293,6 +399,7 @@ def dashboard():
     </html>
     """
 
+
 if __name__ == "__main__":
     uvicorn.run(
         "main:app",
@@ -300,4 +407,3 @@ if __name__ == "__main__":
         port=8000,
         reload=True,
     )
-
