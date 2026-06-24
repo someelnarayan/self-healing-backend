@@ -35,16 +35,14 @@ class ActionResult:
         success: bool,
         duration_ms: int,
         error: Optional[str] = None,
-        skipped: bool = False,
     ):
         self.success = success
         self.duration_ms = duration_ms
         self.error = error
-        self.skipped = skipped
 
 
 # ------------------------------------------------------------
-# Helpers
+# Helper
 # ------------------------------------------------------------
 
 def _get_target(
@@ -58,19 +56,6 @@ def _get_target(
             if t.name == target_name or t.id == target_name
         ),
         None,
-    )
-
-
-def _skip_result(message: str) -> ActionResult:
-    """
-    A skipped action is treated as successful for demo safety,
-    but we keep the reason in error for audit visibility.
-    """
-    return ActionResult(
-        success=True,
-        duration_ms=0,
-        error=message,
-        skipped=True,
     )
 
 
@@ -124,12 +109,9 @@ def restart_service(
     config: AppConfig,
 ) -> ActionResult:
     """
-    Restart behavior by target type:
-
-    - local/docker target:
-        restart configured Docker container
-    - ssh target:
-        if restart_command exists, use it as service restart
+    Used mainly for local/docker targets such as bookshop.
+    Restarts a configured Docker container and optionally
+    verifies health_url recovery.
     """
     start = time.time()
 
@@ -142,56 +124,6 @@ def restart_service(
         )
 
     try:
-        # ----------------------------------------------------
-        # SSH target restart -> use restart_command
-        # ----------------------------------------------------
-        if target.is_ssh:
-            if not target.restart_command:
-                return _skip_result(
-                    f"restart_service skipped: SSH target {target_name} "
-                    f"has no restart_command configured"
-                )
-
-            print(
-                f"[Executor] SSH restart_service on {target.name}: "
-                f"{target.restart_command}",
-                flush=True,
-            )
-
-            ok, output = _ssh_run_command(
-                target,
-                target.restart_command,
-            )
-
-            duration = int((time.time() - start) * 1000)
-
-            if not ok:
-                return ActionResult(
-                    False,
-                    duration,
-                    output or "SSH restart_service failed",
-                )
-
-            # verify process if configured
-            if target.process_name:
-                verify_cmd = f"pgrep -af '{target.process_name}'"
-                verify_ok, verify_output = _ssh_run_command(
-                    target,
-                    verify_cmd,
-                )
-
-                if not verify_ok or not verify_output.strip():
-                    return ActionResult(
-                        False,
-                        duration,
-                        "restart_service ran but process verification failed",
-                    )
-
-            return ActionResult(True, duration)
-
-        # ----------------------------------------------------
-        # Local/docker restart
-        # ----------------------------------------------------
         if not target.container_name:
             return ActionResult(
                 False,
@@ -263,8 +195,10 @@ def retry_http_endpoint(
         )
 
     if not target.health_url:
-        return _skip_result(
-            f"retry_http_endpoint skipped: target {target_name} has no health_url"
+        return ActionResult(
+            False,
+            0,
+            f"Target {target_name} has no health_url configured",
         )
 
     delay = 1
@@ -382,16 +316,13 @@ def rotate_log(
     log_path = target.log_path
 
     if not log_path:
-        return _skip_result(
-            f"rotate_log skipped: target {target_name} has no log_path configured"
+        return ActionResult(
+            False,
+            0,
+            f"Target {target_name} has no log_path configured",
         )
 
     try:
-        if not os.path.exists(log_path):
-            return _skip_result(
-                f"rotate_log skipped: log file does not exist at {log_path}"
-            )
-
         backup_file = f"{log_path}.bak.{int(time.time())}"
 
         os.rename(log_path, backup_file)
@@ -424,8 +355,10 @@ def restart_process(
         )
 
     if not target.is_ssh:
-        return _skip_result(
-            f"restart_process skipped: target {target_name} is not SSH"
+        return ActionResult(
+            False,
+            0,
+            f"restart_process only supports SSH targets, got {target.type}",
         )
 
     if not target.restart_command:
@@ -457,7 +390,10 @@ def restart_process(
 
     # Verify process came back
     if target.process_name:
-        verify_cmd = f"pgrep -af '{target.process_name}'"
+        verify_cmd = (
+            f"pgrep -af '{target.process_name}'"
+        )
+
         verify_ok, verify_output = _ssh_run_command(
             target,
             verify_cmd,
@@ -482,7 +418,6 @@ def cleanup_demo(
     runs the configured cleanup_command on the remote WSL demo target.
 
     Intended for safe HIGH_CPU / HIGH_RAM handling in the demo lab.
-    For non-SSH targets, this action is skipped gracefully.
     """
     start = time.time()
 
@@ -495,8 +430,10 @@ def cleanup_demo(
         )
 
     if not target.is_ssh:
-        return _skip_result(
-            f"cleanup_demo skipped: target {target_name} is not SSH"
+        return ActionResult(
+            False,
+            0,
+            f"cleanup_demo only supports SSH targets, got {target.type}",
         )
 
     if not target.cleanup_command:
@@ -643,19 +580,12 @@ class Executor:
             if not result.success:
                 overall_success = False
 
-            if result.skipped:
-                print(
-                    f"[Executor] {action_name} -> SKIPPED "
-                    f"({result.duration_ms} ms) | {result.error}",
-                    flush=True,
-                )
-            else:
-                print(
-                    f"[Executor] {action_name} -> "
-                    f"{'SUCCESS' if result.success else 'FAILED'} "
-                    f"({result.duration_ms} ms)",
-                    flush=True,
-                )
+            print(
+                f"[Executor] {action_name} -> "
+                f"{'SUCCESS' if result.success else 'FAILED'} "
+                f"({result.duration_ms} ms)",
+                flush=True,
+            )
 
         # --------------------------------------------------------
         # Final incident state

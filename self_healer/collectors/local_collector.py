@@ -22,17 +22,16 @@ class LocalCollector(BaseCollector):
     - Docker container memory usage (if container_name configured)
 
     Important behavior:
-    On the very first log read, it jumps to the END of the log file
-    so that old historical log lines do not trigger false anomalies.
+    - On first log read, it jumps to EOF so old historical log lines
+      do not trigger false anomalies.
+    - Docker stats parsing is defensive, so missing fields do not crash monitoring.
     """
 
     def __init__(self, target: Target):
         self.target = target
 
-        # None means "log file not initialized yet"
-        # On first read we will move to EOF and start tracking from there.
+        # None = log not initialized yet
         self._log_pos: int | None = None
-
 
     def collect(self) -> dict:
         healthy, response_ms = _collect_http(self.target)
@@ -57,16 +56,13 @@ class LocalCollector(BaseCollector):
         }
 
 
-def _collect_http(
-    target: Target,
-) -> tuple[bool, int]:
+def _collect_http(target: Target) -> tuple[bool, int]:
     """
     Perform HTTP health check for local service.
     Returns:
         (healthy, response_ms)
     """
     if not target.health_url:
-        # No health URL configured → treat as healthy but no response timing
         return True, 0
 
     try:
@@ -89,9 +85,7 @@ def _collect_http(
         return False, 9999
 
 
-def _collect_logs(
-    collector: LocalCollector,
-) -> int:
+def _collect_logs(collector: LocalCollector) -> int:
     """
     Count NEW error lines appended to the log since the previous poll.
 
@@ -114,29 +108,20 @@ def _collect_logs(
 
     try:
         with open(path, "r", encoding="utf-8", errors="replace") as f:
-            # ------------------------------------------------------
-            # First-ever read:
-            # move to end of file so old log history is ignored
-            # ------------------------------------------------------
+            # First ever read → ignore historical log lines
             if collector._log_pos is None:
-                f.seek(0, 2)  # move to EOF
+                f.seek(0, 2)  # EOF
                 collector._log_pos = f.tell()
                 return 0
 
-            # ------------------------------------------------------
-            # Handle log rotation / truncation:
-            # if file became smaller than old offset,
-            # restart reading from beginning
-            # ------------------------------------------------------
+            # Handle log truncation / rotation
             f.seek(0, 2)
             file_size = f.tell()
 
             if collector._log_pos > file_size:
                 collector._log_pos = 0
 
-            # ------------------------------------------------------
-            # Read only newly appended lines
-            # ------------------------------------------------------
+            # Read only newly appended content
             f.seek(collector._log_pos)
 
             for line in f:
@@ -162,35 +147,66 @@ def _collect_logs(
 
 def _collect_system() -> tuple[float, float]:
     """
-    Collect host CPU and RAM.
-    Note:
-    Since healer runs in Docker, this reflects the environment visible
-    to the healer container / host runtime setup.
+    Collect host CPU and RAM as seen from healer runtime.
     """
     cpu_pct = psutil.cpu_percent(interval=1)
     ram_pct = psutil.virtual_memory().percent
     return cpu_pct, ram_pct
 
 
-def _collect_container(
-    container_name: str,
-) -> dict:
+def _collect_container(container_name: str) -> dict:
     """
-    Collect docker container memory usage for a target container.
+    Collect Docker container memory stats safely.
+
     Returns:
-        {"memory_mb": ...}
+        {
+            "memory_mb": float,
+            "disk_pct": 0.0
+        }
+
+    Why this version is safer:
+    - Some Docker stats payloads may not contain memory_stats["usage"]
+    - Some payloads may be partially empty for a moment right after container startup
+    - We do not want monitoring to break because of missing keys
     """
     try:
         client = docker.from_env()
         container = client.containers.get(container_name)
-        stats = container.stats(stream=False)
+        stats = container.stats(stream=False) or {}
 
-        memory_usage_mb = (
-            stats["memory_stats"]["usage"] / (1024 * 1024)
+        memory_stats = stats.get("memory_stats", {}) or {}
+
+        # Docker sometimes gives:
+        # memory_stats = {"usage": ...}
+        # sometimes "usage" can be absent momentarily
+        raw_usage = memory_stats.get("usage", 0)
+
+        # Optional: subtract cache to get more realistic app memory
+        stats_stats = memory_stats.get("stats", {}) or {}
+        cache = (
+            stats_stats.get("cache")
+            or stats_stats.get("inactive_file")
+            or 0
         )
 
+        # Never go negative
+        effective_usage = max(raw_usage - cache, 0)
+
+        memory_usage_mb = effective_usage / (1024 * 1024)
+
         return {
-            "memory_mb": round(memory_usage_mb, 2)
+            "memory_mb": round(memory_usage_mb, 2),
+            "disk_pct": 0.0,
+        }
+
+    except docker.errors.NotFound:
+        print(
+            f"[Monitor] Container not found: {container_name}",
+            flush=True,
+        )
+        return {
+            "memory_mb": 0.0,
+            "disk_pct": 0.0,
         }
 
     except Exception as e:
@@ -198,7 +214,7 @@ def _collect_container(
             f"[Monitor] Container stats error for {container_name}: {e}",
             flush=True,
         )
-
         return {
-            "memory_mb": 0.0
+            "memory_mb": 0.0,
+            "disk_pct": 0.0,
         }

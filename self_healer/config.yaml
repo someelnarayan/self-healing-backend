@@ -2,7 +2,7 @@ targets:
   - id: bookshop
     name: bookshop
     type: local
-    health_url: http://bookshop:8080
+    health_url: http://bookshop:8080/health
     log_path: /var/log/bookshop/app.log
     container_name: bookshop
     poll_interval_seconds: 10
@@ -16,21 +16,18 @@ targets:
     username: hpsomeel
     ssh_key: /root/.ssh/id_rsa
     poll_interval_seconds: 10
+
+    # keep SSH operational fields at top-level
+    process_name: dummy_service.py
+    restart_command: bash /home/hpsomeel/healer_demo_lab/restart_dummy.sh
+    cleanup_command: bash /home/hpsomeel/healer_demo_lab/cleanup_demo.sh
+    kill_command: bash /home/hpsomeel/healer_demo_lab/kill_dummy.sh
+    tmp_dir: /home/hpsomeel/healer_demo_lab/tmp
+    demo_base_dir: /home/hpsomeel/healer_demo_lab
+    log_path: /home/hpsomeel/healer_demo_lab/logs/dummy.log
+
     metadata:
       service_kind: ssh_target
-
-      # Demo lab identity
-      demo_base_dir: /home/hpsomeel/healer_demo_lab
-      process_name: dummy_service.py
-
-      # Safe demo-lab-only commands
-      restart_command: bash /home/hpsomeel/healer_demo_lab/restart_dummy.sh
-      cleanup_command: bash /home/hpsomeel/healer_demo_lab/cleanup_demo.sh
-      kill_command: bash /home/hpsomeel/healer_demo_lab/kill_dummy.sh
-
-      # Optional future paths for log/temp based healing
-      log_path: /home/hpsomeel/healer_demo_lab/logs/dummy.log
-      tmp_dir: /home/hpsomeel/healer_demo_lab/tmp
 
   - id: prom-local
     name: prom-local
