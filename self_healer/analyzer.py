@@ -62,6 +62,30 @@ def _all_above(
     )
 
 
+def _count_above(
+    signals: List[Signal],
+    attr: str,
+    threshold: float,
+) -> int:
+    return sum(
+        1
+        for signal in signals
+        if getattr(signal, attr, 0) > threshold
+    )
+
+
+def _consecutive_failures(
+    signals: List[Signal],
+) -> int:
+    count = 0
+    for signal in reversed(signals):
+        if not signal.health_ok:
+            count += 1
+        else:
+            break
+    return count
+
+
 def _memory_leak_trend(
     signals: List[Signal],
     min_growth: float = 15.0,
@@ -128,14 +152,11 @@ class Analyzer:
         events: List[AnomalyEvent] = []
         latest = window[-1]
 
-        # Resolve the actual Target object so analyzer can make
-        # target-aware decisions (SSH vs local vs prometheus)
+        # Resolve actual target object for target-aware checks
         target = self.config.get_target(target_name)
 
         # ----------------------------------------------------------
-        # SSH PROCESS DOWN (NEW)
-        # If the monitored SSH demo process is not running,
-        # create PROCESS_DOWN anomaly immediately.
+        # SSH PROCESS DOWN
         # ----------------------------------------------------------
         if (
             target is not None
@@ -159,15 +180,9 @@ class Analyzer:
 
         # ----------------------------------------------------------
         # HEALTH CHECK FAILURE
-        # Require consecutive failures
+        # Require 2 consecutive failed health checks
         # ----------------------------------------------------------
-        consecutive_failures = 0
-
-        for signal in reversed(window):
-            if not signal.health_ok:
-                consecutive_failures += 1
-            else:
-                break
+        consecutive_failures = _consecutive_failures(window)
 
         if consecutive_failures >= 2:
             events.append(
@@ -189,13 +204,16 @@ class Analyzer:
 
         # ----------------------------------------------------------
         # HIGH CPU
-        # Trigger only if CPU stays above threshold for whole window
+        # NEW LOGIC:
+        # trigger if >= 3 of last N samples exceed threshold
         # ----------------------------------------------------------
-        if _all_above(
+        cpu_hits = _count_above(
             window,
             "cpu_pct",
             thresholds.cpu_percent,
-        ):
+        )
+
+        if cpu_hits >= 3:
             events.append(
                 AnomalyEvent(
                     anomaly_type="HIGH_CPU",
@@ -205,19 +223,24 @@ class Analyzer:
                     context={
                         "cpu_pct": latest.cpu_pct,
                         "threshold": thresholds.cpu_percent,
+                        "window_size": window_size,
+                        "samples_above_threshold": cpu_hits,
                     },
                 )
             )
 
         # ----------------------------------------------------------
         # HIGH RAM
-        # Trigger if RAM stays above threshold for whole window
+        # NEW LOGIC:
+        # trigger if >= 3 of last N samples exceed threshold
         # ----------------------------------------------------------
-        if _all_above(
+        ram_hits = _count_above(
             window,
             "ram_pct",
             thresholds.ram_percent,
-        ):
+        )
+
+        if ram_hits >= 3:
             events.append(
                 AnomalyEvent(
                     anomaly_type="HIGH_RAM",
@@ -227,13 +250,14 @@ class Analyzer:
                     context={
                         "ram_pct": latest.ram_pct,
                         "threshold": thresholds.ram_percent,
+                        "window_size": window_size,
+                        "samples_above_threshold": ram_hits,
                     },
                 )
             )
 
         # ----------------------------------------------------------
         # MEMORY LEAK TREND
-        # Detect steady RAM growth across the window
         # ----------------------------------------------------------
         if _memory_leak_trend(window):
             events.append(
@@ -252,6 +276,7 @@ class Analyzer:
 
         # ----------------------------------------------------------
         # SLOW RESPONSE
+        # keep strict window logic here
         # ----------------------------------------------------------
         if _all_above(
             window,
@@ -305,8 +330,10 @@ class Analyzer:
                 unique_events.append(event)
 
         # ----------------------------------------------------------
-        # Persist anomalies
+        # Persist anomalies only once per active incident
         # ----------------------------------------------------------
+        final_events: List[AnomalyEvent] = []
+
         for event in unique_events:
             if self.kb.incident_exists(
                 event.target_name,
@@ -333,4 +360,6 @@ class Analyzer:
                 context=json.dumps(event.context),
             )
 
-        return unique_events
+            final_events.append(event)
+
+        return final_events

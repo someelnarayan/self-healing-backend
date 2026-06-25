@@ -1,22 +1,3 @@
-"""
-executor.py · Execute (E in MAPE-K)
-
-Responsibilities:
-- Execute planned recovery actions
-- Record audit logs
-- Return action results to orchestrator / planner layer
-
-Supported actions:
-- restart_service
-- restart_process
-- cleanup_demo                  (backward compatibility)
-- cleanup_cpu_stress           (NEW)
-- cleanup_mem_stress           (NEW)
-- cleanup_temp_files           (NEW)
-- send_alert
-- retry_http_endpoint
-"""
-
 from __future__ import annotations
 
 import subprocess
@@ -39,6 +20,7 @@ from knowledge import KnowledgeBase
 class ActionResult:
     action: str
     target_name: str
+    anomaly_type: str
     success: bool
     message: str = ""
     duration_ms: int = 0
@@ -53,7 +35,6 @@ class Executor:
         self.config = config
         self.kb = kb
 
-        # Docker client reused for local/docker restart_service
         try:
             self._docker = docker.from_env()
         except Exception:
@@ -62,10 +43,10 @@ class Executor:
         self._action_registry: Dict[str, Callable[[Target], ActionResult]] = {
             "restart_service": self._restart_service,
             "restart_process": self._restart_process,
-            "cleanup_demo": self._cleanup_demo,                   # backward compatibility
-            "cleanup_cpu_stress": self._cleanup_cpu_stress,       # NEW
-            "cleanup_mem_stress": self._cleanup_mem_stress,       # NEW
-            "cleanup_temp_files": self._cleanup_temp_files,       # NEW
+            "cleanup_demo": self._cleanup_demo,
+            "cleanup_cpu_stress": self._cleanup_cpu_stress,
+            "cleanup_mem_stress": self._cleanup_mem_stress,
+            "cleanup_temp_files": self._cleanup_temp_files,
             "send_alert": self._send_alert,
             "retry_http_endpoint": self._retry_http_endpoint,
         }
@@ -73,7 +54,12 @@ class Executor:
     # --------------------------------------------------------------
     # Public entry point
     # --------------------------------------------------------------
-    def run_action(self, action: str, target: Target) -> ActionResult:
+    def run_action(
+        self,
+        action: str,
+        target: Target,
+        anomaly_type: str,
+    ) -> ActionResult:
         print(f"[Executor] Running {action} on {target.name}", flush=True)
 
         handler = self._action_registry.get(action)
@@ -81,6 +67,7 @@ class Executor:
             result = ActionResult(
                 action=action,
                 target_name=target.name,
+                anomaly_type=anomaly_type,
                 success=False,
                 message=f"Unknown action: {action}",
                 duration_ms=0,
@@ -89,19 +76,20 @@ class Executor:
             return result
 
         started = time.perf_counter()
+
         try:
-            result = handler(target)
+            result = handler(target, anomaly_type)
         except Exception as e:
             duration_ms = int((time.perf_counter() - started) * 1000)
             result = ActionResult(
                 action=action,
                 target_name=target.name,
+                anomaly_type=anomaly_type,
                 success=False,
                 message=f"{type(e).__name__}: {e}",
                 duration_ms=duration_ms,
             )
 
-        # If handler didn’t set duration, fill it
         if result.duration_ms == 0:
             result.duration_ms = int((time.perf_counter() - started) * 1000)
 
@@ -120,57 +108,62 @@ class Executor:
     # --------------------------------------------------------------
     # Action handlers
     # --------------------------------------------------------------
-    def _restart_service(self, target: Target) -> ActionResult:
-        """
-        Restart a target service.
-
-        Current behavior:
-        - For docker-backed local targets (bookshop), restart container
-        - For SSH demo target, falls back to restart_command if provided
-        """
+    def _restart_service(
+        self,
+        target: Target,
+        anomaly_type: str,
+    ) -> ActionResult:
         if target.container_name:
             if self._docker is None:
                 return ActionResult(
                     action="restart_service",
                     target_name=target.name,
+                    anomaly_type=anomaly_type,
                     success=False,
                     message="Docker client unavailable",
                 )
 
-            print(f"[Executor] Restarting container {target.container_name}", flush=True)
+            print(
+                f"[Executor] Restarting container {target.container_name}",
+                flush=True,
+            )
             container = self._docker.containers.get(target.container_name)
             container.restart()
 
             return ActionResult(
                 action="restart_service",
                 target_name=target.name,
+                anomaly_type=anomaly_type,
                 success=True,
                 message=f"Restarted container {target.container_name}",
             )
 
-        # Fallback: if SSH target or any target provides restart_command
         if target.restart_command:
             return self._run_shell_action(
                 action="restart_service",
                 target=target,
+                anomaly_type=anomaly_type,
                 command=target.restart_command,
             )
 
         return ActionResult(
             action="restart_service",
             target_name=target.name,
+            anomaly_type=anomaly_type,
             success=False,
             message="No container_name or restart_command configured",
         )
 
-    def _restart_process(self, target: Target) -> ActionResult:
-        """
-        Restart a process on SSH / demo target using restart_command.
-        """
+    def _restart_process(
+        self,
+        target: Target,
+        anomaly_type: str,
+    ) -> ActionResult:
         if not target.restart_command:
             return ActionResult(
                 action="restart_process",
                 target_name=target.name,
+                anomaly_type=anomaly_type,
                 success=False,
                 message="restart_command not configured",
             )
@@ -178,17 +171,20 @@ class Executor:
         return self._run_shell_action(
             action="restart_process",
             target=target,
+            anomaly_type=anomaly_type,
             command=target.restart_command,
         )
 
-    def _cleanup_demo(self, target: Target) -> ActionResult:
-        """
-        Backward-compatible generic cleanup.
-        """
+    def _cleanup_demo(
+        self,
+        target: Target,
+        anomaly_type: str,
+    ) -> ActionResult:
         if not target.cleanup_command:
             return ActionResult(
                 action="cleanup_demo",
                 target_name=target.name,
+                anomaly_type=anomaly_type,
                 success=False,
                 message="cleanup_command not configured",
             )
@@ -196,18 +192,20 @@ class Executor:
         return self._run_shell_action(
             action="cleanup_demo",
             target=target,
+            anomaly_type=anomaly_type,
             command=target.cleanup_command,
         )
 
-    def _cleanup_cpu_stress(self, target: Target) -> ActionResult:
-        """
-        CPU-specific cleanup action.
-        Expects cleanup_cpu_command in config.
-        """
+    def _cleanup_cpu_stress(
+        self,
+        target: Target,
+        anomaly_type: str,
+    ) -> ActionResult:
         if not target.cleanup_cpu_command:
             return ActionResult(
                 action="cleanup_cpu_stress",
                 target_name=target.name,
+                anomaly_type=anomaly_type,
                 success=False,
                 message="cleanup_cpu_command not configured",
             )
@@ -215,18 +213,20 @@ class Executor:
         return self._run_shell_action(
             action="cleanup_cpu_stress",
             target=target,
+            anomaly_type=anomaly_type,
             command=target.cleanup_cpu_command,
         )
 
-    def _cleanup_mem_stress(self, target: Target) -> ActionResult:
-        """
-        Memory-specific cleanup action.
-        Expects cleanup_mem_command in config.
-        """
+    def _cleanup_mem_stress(
+        self,
+        target: Target,
+        anomaly_type: str,
+    ) -> ActionResult:
         if not target.cleanup_mem_command:
             return ActionResult(
                 action="cleanup_mem_stress",
                 target_name=target.name,
+                anomaly_type=anomaly_type,
                 success=False,
                 message="cleanup_mem_command not configured",
             )
@@ -234,18 +234,20 @@ class Executor:
         return self._run_shell_action(
             action="cleanup_mem_stress",
             target=target,
+            anomaly_type=anomaly_type,
             command=target.cleanup_mem_command,
         )
 
-    def _cleanup_temp_files(self, target: Target) -> ActionResult:
-        """
-        Disk/temp-file cleanup action.
-        Expects cleanup_disk_command in config.
-        """
+    def _cleanup_temp_files(
+        self,
+        target: Target,
+        anomaly_type: str,
+    ) -> ActionResult:
         if not target.cleanup_disk_command:
             return ActionResult(
                 action="cleanup_temp_files",
                 target_name=target.name,
+                anomaly_type=anomaly_type,
                 success=False,
                 message="cleanup_disk_command not configured",
             )
@@ -253,33 +255,36 @@ class Executor:
         return self._run_shell_action(
             action="cleanup_temp_files",
             target=target,
+            anomaly_type=anomaly_type,
             command=target.cleanup_disk_command,
         )
 
-    def _send_alert(self, target: Target) -> ActionResult:
-        """
-        Placeholder alert action.
-        You can later wire this into Slack / email.
-        """
+    def _send_alert(
+        self,
+        target: Target,
+        anomaly_type: str,
+    ) -> ActionResult:
         message = f"Anomaly detected on target {target.name}"
         print(f"[ALERT] {message}", flush=True)
 
         return ActionResult(
             action="send_alert",
             target_name=target.name,
+            anomaly_type=anomaly_type,
             success=True,
             message=message,
         )
 
-    def _retry_http_endpoint(self, target: Target) -> ActionResult:
-        """
-        Simple retry probe for HTTP-based services.
-        Useful as a soft recovery / verification action.
-        """
+    def _retry_http_endpoint(
+        self,
+        target: Target,
+        anomaly_type: str,
+    ) -> ActionResult:
         if not target.health_url:
             return ActionResult(
                 action="retry_http_endpoint",
                 target_name=target.name,
+                anomaly_type=anomaly_type,
                 success=False,
                 message="health_url not configured",
             )
@@ -291,6 +296,7 @@ class Executor:
             return ActionResult(
                 action="retry_http_endpoint",
                 target_name=target.name,
+                anomaly_type=anomaly_type,
                 success=ok,
                 message=f"HTTP {response.status_code} from {target.health_url}",
             )
@@ -299,6 +305,7 @@ class Executor:
             return ActionResult(
                 action="retry_http_endpoint",
                 target_name=target.name,
+                anomaly_type=anomaly_type,
                 success=False,
                 message=f"Retry failed: {e}",
             )
@@ -310,14 +317,9 @@ class Executor:
         self,
         action: str,
         target: Target,
+        anomaly_type: str,
         command: str,
     ) -> ActionResult:
-        """
-        Run a shell command locally inside healer container / runtime.
-
-        This is used for the SSH demo-lab shell scripts mounted / accessible
-        to the healer runtime.
-        """
         try:
             completed = subprocess.run(
                 command,
@@ -336,13 +338,13 @@ class Executor:
                 msg_parts.append(f"stdout={stdout}")
             if stderr:
                 msg_parts.append(f"stderr={stderr}")
-
             if not msg_parts:
                 msg_parts.append(f"returncode={completed.returncode}")
 
             return ActionResult(
                 action=action,
                 target_name=target.name,
+                anomaly_type=anomaly_type,
                 success=success,
                 message=" | ".join(msg_parts),
             )
@@ -351,6 +353,7 @@ class Executor:
             return ActionResult(
                 action=action,
                 target_name=target.name,
+                anomaly_type=anomaly_type,
                 success=False,
                 message=f"Command timed out: {command}",
             )
@@ -359,6 +362,7 @@ class Executor:
             return ActionResult(
                 action=action,
                 target_name=target.name,
+                anomaly_type=anomaly_type,
                 success=False,
                 message=f"Shell action failed: {e}",
             )
@@ -366,28 +370,15 @@ class Executor:
     def _write_audit(self, result: ActionResult) -> None:
         """
         Persist action result into KnowledgeBase audit log.
-
-        Assumes kb has write_audit(...) or equivalent.
-        If your KB method name differs, adjust only this function.
         """
         try:
-            # Preferred signature
             self.kb.write_audit(
                 target_name=result.target_name,
+                anomaly_type=result.anomaly_type,
                 action=result.action,
                 success=result.success,
-                message=result.message,
+                duration_ms=result.duration_ms,
+                error_msg=None if result.success else result.message,
             )
-        except TypeError:
-            # Backward-compatible fallback if KB expects slightly different args
-            try:
-                self.kb.write_audit(
-                    result.target_name,
-                    result.action,
-                    result.success,
-                    result.message,
-                )
-            except Exception as e:
-                print(f"[Executor] Audit write failed: {e}", flush=True)
         except Exception as e:
             print(f"[Executor] Audit write failed: {e}", flush=True)

@@ -153,7 +153,32 @@ def _control_loop():
                     # 4) Execute
                     # --------------------------------------------------
                     if plan.actions:
-                        executor.execute(plan)
+                        target_obj = config.get_target(ev.target_name)
+
+                        if not target_obj:
+                            print(
+                                f"[Executor] Target not found for execution: {ev.target_name}",
+                                flush=True,
+                            )
+                        else:
+                            for action in plan.actions:
+                                result = executor.run_action(
+                                    action=action,
+                                    target=target_obj,
+                                    anomaly_type=ev.anomaly_type,
+                                )
+
+                                _event_put(
+                                    "action_result",
+                                    {
+                                        "target_name": ev.target_name,
+                                        "anomaly_type": ev.anomaly_type,
+                                        "action": result.action,
+                                        "success": result.success,
+                                        "message": result.message,
+                                        "duration_ms": result.duration_ms,
+                                    },
+                                )
                     else:
                         print(
                             f"[Executor] No executable actions for "
@@ -163,7 +188,6 @@ def _control_loop():
 
                     # --------------------------------------------------
                     # 5) Set cooldown using planner's anomaly-specific key
-                    #    Only for normal plans, not cooldown-mode alert-only plans
                     # --------------------------------------------------
                     cooldown_key = plan.metadata.get("cooldown_key", "")
                     cooldown_minutes = plan.cooldown_minutes or 0

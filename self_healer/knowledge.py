@@ -17,7 +17,7 @@ class KnowledgeBase:
         self._cooldowns: Dict[str, float] = {}
 
         # (target_name, anomaly_type) -> incident state
-        self._active_incidents: Dict[tuple, Dict[str, Any]] = {}
+        self._active_incidents: Dict[tuple[str, str], Dict[str, Any]] = {}
 
         self.db_path = self._normalize_db_path(db_path)
 
@@ -28,6 +28,7 @@ class KnowledgeBase:
             check_same_thread=False,
             uri=uri_mode,
         )
+        self._connection.row_factory = sqlite3.Row
 
         self._init_db()
 
@@ -37,10 +38,7 @@ class KnowledgeBase:
 
     def _normalize_db_path(self, db_path: str) -> str:
         if db_path == ":memory:":
-            return (
-                f"file:kb_{uuid.uuid4().hex}"
-                f"?mode=memory&cache=shared"
-            )
+            return f"file:kb_{uuid.uuid4().hex}?mode=memory&cache=shared"
         return db_path
 
     @contextmanager
@@ -66,16 +64,16 @@ class KnowledgeBase:
                 """
                 CREATE TABLE IF NOT EXISTS signal_log (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    ts TEXT,
-                    target_name TEXT,
-                    cpu_pct REAL,
-                    ram_pct REAL,
-                    memory_mb REAL,
-                    disk_pct REAL,
-                    ssh_status TEXT,
-                    response_ms INTEGER,
-                    health_ok INTEGER,
-                    error_count INTEGER
+                    ts TEXT NOT NULL,
+                    target_name TEXT NOT NULL,
+                    cpu_pct REAL DEFAULT 0,
+                    ram_pct REAL DEFAULT 0,
+                    memory_mb REAL DEFAULT 0,
+                    disk_pct REAL DEFAULT 0,
+                    ssh_status TEXT DEFAULT 'unknown',
+                    response_ms INTEGER DEFAULT 0,
+                    health_ok INTEGER DEFAULT 1,
+                    error_count INTEGER DEFAULT 0
                 )
                 """
             )
@@ -84,11 +82,11 @@ class KnowledgeBase:
                 """
                 CREATE TABLE IF NOT EXISTS anomaly_log (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    ts TEXT,
-                    target_name TEXT,
-                    anomaly_type TEXT,
-                    severity TEXT,
-                    metric_value REAL,
+                    ts TEXT NOT NULL,
+                    target_name TEXT NOT NULL,
+                    anomaly_type TEXT NOT NULL,
+                    severity TEXT NOT NULL,
+                    metric_value REAL DEFAULT 0,
                     context TEXT
                 )
                 """
@@ -98,12 +96,12 @@ class KnowledgeBase:
                 """
                 CREATE TABLE IF NOT EXISTS audit_log (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    ts TEXT,
-                    target_name TEXT,
-                    anomaly_type TEXT,
-                    action TEXT,
-                    success INTEGER,
-                    duration_ms INTEGER,
+                    ts TEXT NOT NULL,
+                    target_name TEXT NOT NULL,
+                    anomaly_type TEXT NOT NULL,
+                    action TEXT NOT NULL,
+                    success INTEGER NOT NULL,
+                    duration_ms INTEGER NOT NULL DEFAULT 0,
                     error_msg TEXT
                 )
                 """
@@ -113,7 +111,7 @@ class KnowledgeBase:
     # Summary
     # ------------------------------------------------------------
 
-    def summary(self):
+    def summary(self) -> dict:
         with self._lock, self._conn() as conn:
             signal_count = conn.execute(
                 "SELECT COUNT(*) FROM signal_log"
@@ -142,15 +140,15 @@ class KnowledgeBase:
 
     def write_signal(
         self,
-        target_name,
-        cpu_pct,
-        ram_pct,
-        memory_mb=0,
-        disk_pct=0,
-        ssh_status="unknown",
-        response_ms=0,
-        health_ok=True,
-        error_count=0,
+        target_name: str,
+        cpu_pct: float,
+        ram_pct: float,
+        memory_mb: float = 0.0,
+        disk_pct: float = 0.0,
+        ssh_status: str = "unknown",
+        response_ms: int = 0,
+        health_ok: bool = True,
+        error_count: int = 0,
     ):
         with self._lock, self._conn() as conn:
             conn.execute(
@@ -185,11 +183,11 @@ class KnowledgeBase:
 
     def write_anomaly(
         self,
-        target_name,
-        anomaly_type,
-        severity,
-        metric_value,
-        context,
+        target_name: str,
+        anomaly_type: str,
+        severity: str,
+        metric_value: float,
+        context: str,
     ):
         with self._lock, self._conn() as conn:
             conn.execute(
@@ -216,13 +214,26 @@ class KnowledgeBase:
 
     def write_audit(
         self,
-        target_name,
-        anomaly_type,
-        action,
-        success,
-        duration_ms,
-        error_msg=None,
+        target_name: str,
+        anomaly_type: str,
+        action: str,
+        success: bool,
+        duration_ms: int = 0,
+        error_msg: str | None = None,
     ):
+        """
+        Store one executor action result.
+
+        Example:
+            kb.write_audit(
+                target_name="ssh-test",
+                anomaly_type="HIGH_CPU",
+                action="cleanup_cpu_stress",
+                success=True,
+                duration_ms=82,
+                error_msg=None,
+            )
+        """
         with self._lock, self._conn() as conn:
             conn.execute(
                 """
@@ -243,7 +254,7 @@ class KnowledgeBase:
                     anomaly_type,
                     action,
                     int(success),
-                    duration_ms,
+                    int(duration_ms),
                     error_msg,
                 ),
             )
@@ -256,7 +267,7 @@ class KnowledgeBase:
         self,
         limit: int = 100,
         target_name: str | None = None,
-    ):
+    ) -> list[dict]:
         query = """
             SELECT
                 id,
@@ -272,7 +283,7 @@ class KnowledgeBase:
                 error_count
             FROM signal_log
         """
-        params: list = []
+        params: list[Any] = []
 
         if target_name:
             query += " WHERE target_name = ?"
@@ -286,26 +297,26 @@ class KnowledgeBase:
 
         return [
             {
-                "id": r[0],
-                "ts": r[1],
-                "target_name": r[2],
-                "cpu_pct": r[3],
-                "ram_pct": r[4],
-                "memory_mb": r[5],
-                "disk_pct": r[6],
-                "ssh_status": r[7],
-                "response_ms": r[8],
-                "health_ok": bool(r[9]),
-                "error_count": r[10],
+                "id": row["id"],
+                "ts": row["ts"],
+                "target_name": row["target_name"],
+                "cpu_pct": row["cpu_pct"],
+                "ram_pct": row["ram_pct"],
+                "memory_mb": row["memory_mb"],
+                "disk_pct": row["disk_pct"],
+                "ssh_status": row["ssh_status"],
+                "response_ms": row["response_ms"],
+                "health_ok": bool(row["health_ok"]),
+                "error_count": row["error_count"],
             }
-            for r in rows
+            for row in rows
         ]
 
     def get_anomalies(
         self,
         limit: int = 100,
         target_name: str | None = None,
-    ):
+    ) -> list[dict]:
         query = """
             SELECT
                 id,
@@ -317,7 +328,7 @@ class KnowledgeBase:
                 context
             FROM anomaly_log
         """
-        params: list = []
+        params: list[Any] = []
 
         if target_name:
             query += " WHERE target_name = ?"
@@ -331,22 +342,22 @@ class KnowledgeBase:
 
         return [
             {
-                "id": r[0],
-                "ts": r[1],
-                "target_name": r[2],
-                "anomaly_type": r[3],
-                "severity": r[4],
-                "metric_value": r[5],
-                "context": r[6],
+                "id": row["id"],
+                "ts": row["ts"],
+                "target_name": row["target_name"],
+                "anomaly_type": row["anomaly_type"],
+                "severity": row["severity"],
+                "metric_value": row["metric_value"],
+                "context": row["context"],
             }
-            for r in rows
+            for row in rows
         ]
 
     def get_audit(
         self,
         limit: int = 100,
         target_name: str | None = None,
-    ):
+    ) -> list[dict]:
         query = """
             SELECT
                 id,
@@ -359,7 +370,7 @@ class KnowledgeBase:
                 error_msg
             FROM audit_log
         """
-        params: list = []
+        params: list[Any] = []
 
         if target_name:
             query += " WHERE target_name = ?"
@@ -373,16 +384,16 @@ class KnowledgeBase:
 
         return [
             {
-                "id": r[0],
-                "ts": r[1],
-                "target_name": r[2],
-                "anomaly_type": r[3],
-                "action": r[4],
-                "success": bool(r[5]),
-                "duration_ms": r[6],
-                "error_msg": r[7],
+                "id": row["id"],
+                "ts": row["ts"],
+                "target_name": row["target_name"],
+                "anomaly_type": row["anomaly_type"],
+                "action": row["action"],
+                "success": bool(row["success"]),
+                "duration_ms": row["duration_ms"],
+                "error_msg": row["error_msg"],
             }
-            for r in rows
+            for row in rows
         ]
 
     # ------------------------------------------------------------
@@ -425,8 +436,7 @@ class KnowledgeBase:
         target_name: str,
         anomaly_type: str,
     ) -> bool:
-        key = (target_name, anomaly_type)
-        return key in self._active_incidents
+        return (target_name, anomaly_type) in self._active_incidents
 
     def create_incident(
         self,
@@ -434,7 +444,6 @@ class KnowledgeBase:
         anomaly_type: str,
     ):
         key = (target_name, anomaly_type)
-
         self._active_incidents[key] = {
             "status": "OPEN",
             "created_at": time.time(),
@@ -456,7 +465,6 @@ class KnowledgeBase:
         status: str,
     ):
         key = (target_name, anomaly_type)
-
         if key in self._active_incidents:
             self._active_incidents[key]["status"] = status
             self._active_incidents[key]["updated_at"] = time.time()
@@ -467,13 +475,11 @@ class KnowledgeBase:
         anomaly_type: str,
     ) -> Optional[str]:
         key = (target_name, anomaly_type)
-
         if key not in self._active_incidents:
             return None
-
         return self._active_incidents[key].get("status")
 
-    def get_active_incidents(self):
+    def get_active_incidents(self) -> list[dict]:
         results = []
 
         for (target_name, anomaly_type), data in self._active_incidents.items():
