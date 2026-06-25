@@ -18,8 +18,8 @@ class LocalCollector(BaseCollector):
     Collects:
     - HTTP health + response time
     - New log errors since last poll
-    - Host CPU / RAM
-    - Docker container memory usage (if container_name configured)
+    - Host CPU / RAM for normal local targets
+    - Docker container CPU / RAM / memory for container-backed targets
 
     Important behavior:
     - On first log read, it jumps to EOF so old historical log lines
@@ -33,26 +33,49 @@ class LocalCollector(BaseCollector):
         # None = log not initialized yet
         self._log_pos: int | None = None
 
+        # Reuse docker client for container-backed targets
+        self._docker_client = None
+        if getattr(self.target, "container_name", ""):
+            try:
+                self._docker_client = docker.from_env()
+            except Exception as e:
+                print(
+                    f"[Monitor] Docker client init failed for {self.target.name}: {e}",
+                    flush=True,
+                )
+                self._docker_client = None
+
     def collect(self) -> dict:
         healthy, response_ms = _collect_http(self.target)
-
         error_count = _collect_logs(self)
 
-        cpu_pct, ram_pct = _collect_system()
-
-        container_stats = {}
-        if getattr(self.target, "container_name", None):
-            container_stats = _collect_container(
-                self.target.container_name
+        # ---------------------------------------------------------
+        # Resource collection strategy
+        # ---------------------------------------------------------
+        # If this target has a container_name, collect container-scoped
+        # CPU / RAM / memory from Docker.
+        # Otherwise collect host CPU / RAM using psutil.
+        # ---------------------------------------------------------
+        if getattr(self.target, "container_name", ""):
+            resource_stats = _collect_container(
+                self._docker_client,
+                self.target.container_name,
             )
+        else:
+            cpu_pct, ram_pct = _collect_system()
+            resource_stats = {
+                "cpu_pct": cpu_pct,
+                "ram_pct": ram_pct,
+                "memory_mb": 0.0,
+                "memory_limit_mb": 0.0,
+                "disk_pct": 0.0,
+            }
 
         return {
             "healthy": healthy,
             "response_ms": response_ms,
             "error_count": error_count,
-            "cpu_pct": cpu_pct,
-            "ram_pct": ram_pct,
-            **container_stats,
+            **resource_stats,
         }
 
 
@@ -148,40 +171,82 @@ def _collect_logs(collector: LocalCollector) -> int:
 def _collect_system() -> tuple[float, float]:
     """
     Collect host CPU and RAM as seen from healer runtime.
+    Used only for non-container local targets.
     """
     cpu_pct = psutil.cpu_percent(interval=1)
     ram_pct = psutil.virtual_memory().percent
     return cpu_pct, ram_pct
 
 
-def _collect_container(container_name: str) -> dict:
+def _collect_container(
+    docker_client,
+    container_name: str,
+) -> dict:
     """
-    Collect Docker container memory stats safely.
+    Collect Docker container CPU / RAM / memory safely.
 
     Returns:
         {
+            "cpu_pct": float,
+            "ram_pct": float,
             "memory_mb": float,
-            "disk_pct": 0.0
+            "memory_limit_mb": float,
+            "disk_pct": float
         }
 
-    Why this version is safer:
-    - Some Docker stats payloads may not contain memory_stats["usage"]
-    - Some payloads may be partially empty for a moment right after container startup
-    - We do not want monitoring to break because of missing keys
+    Notes:
+    - CPU is computed using Docker cpu_stats + precpu_stats deltas
+    - RAM % is container memory usage / container memory limit
+    - memory_mb is effective container memory usage in MB
+    - memory_limit_mb is included for debugging / observability
+    - disk_pct is left 0.0 for now; disk anomaly will be added later
     """
+    if docker_client is None:
+        return {
+            "cpu_pct": 0.0,
+            "ram_pct": 0.0,
+            "memory_mb": 0.0,
+            "memory_limit_mb": 0.0,
+            "disk_pct": 0.0,
+        }
+
     try:
-        client = docker.from_env()
-        container = client.containers.get(container_name)
+        container = docker_client.containers.get(container_name)
         stats = container.stats(stream=False) or {}
 
+        # ---------------------------------------------------------
+        # CPU calculation
+        # ---------------------------------------------------------
+        cpu_stats = stats.get("cpu_stats", {}) or {}
+        precpu_stats = stats.get("precpu_stats", {}) or {}
+
+        current_total = (
+            cpu_stats.get("cpu_usage", {}) or {}
+        ).get("total_usage", 0)
+
+        previous_total = (
+            precpu_stats.get("cpu_usage", {}) or {}
+        ).get("total_usage", 0)
+
+        current_system = cpu_stats.get("system_cpu_usage", 0)
+        previous_system = precpu_stats.get("system_cpu_usage", 0)
+
+        cpu_delta = current_total - previous_total
+        system_delta = current_system - previous_system
+
+        online_cpus = cpu_stats.get("online_cpus", 1) or 1
+
+        cpu_pct = 0.0
+        if cpu_delta > 0 and system_delta > 0:
+            cpu_pct = (cpu_delta / system_delta) * online_cpus * 100.0
+
+        # ---------------------------------------------------------
+        # Memory calculation
+        # ---------------------------------------------------------
         memory_stats = stats.get("memory_stats", {}) or {}
 
-        # Docker sometimes gives:
-        # memory_stats = {"usage": ...}
-        # sometimes "usage" can be absent momentarily
         raw_usage = memory_stats.get("usage", 0)
 
-        # Optional: subtract cache to get more realistic app memory
         stats_stats = memory_stats.get("stats", {}) or {}
         cache = (
             stats_stats.get("cache")
@@ -192,10 +257,20 @@ def _collect_container(container_name: str) -> dict:
         # Never go negative
         effective_usage = max(raw_usage - cache, 0)
 
-        memory_usage_mb = effective_usage / (1024 * 1024)
+        limit = memory_stats.get("limit", 0)
+
+        memory_mb = effective_usage / (1024 * 1024)
+        memory_limit_mb = limit / (1024 * 1024) if limit else 0.0
+
+        ram_pct = 0.0
+        if limit > 0:
+            ram_pct = (effective_usage / limit) * 100.0
 
         return {
-            "memory_mb": round(memory_usage_mb, 2),
+            "cpu_pct": round(cpu_pct, 2),
+            "ram_pct": round(ram_pct, 2),
+            "memory_mb": round(memory_mb, 2),
+            "memory_limit_mb": round(memory_limit_mb, 2),
             "disk_pct": 0.0,
         }
 
@@ -205,7 +280,10 @@ def _collect_container(container_name: str) -> dict:
             flush=True,
         )
         return {
+            "cpu_pct": 0.0,
+            "ram_pct": 0.0,
             "memory_mb": 0.0,
+            "memory_limit_mb": 0.0,
             "disk_pct": 0.0,
         }
 
@@ -215,6 +293,9 @@ def _collect_container(container_name: str) -> dict:
             flush=True,
         )
         return {
+            "cpu_pct": 0.0,
+            "ram_pct": 0.0,
             "memory_mb": 0.0,
+            "memory_limit_mb": 0.0,
             "disk_pct": 0.0,
         }

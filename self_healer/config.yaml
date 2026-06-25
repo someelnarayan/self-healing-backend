@@ -17,10 +17,19 @@ targets:
     ssh_key: /root/.ssh/id_rsa
     poll_interval_seconds: 10
 
-    # keep SSH operational fields at top-level
+    # SSH operational fields
     process_name: dummy_service.py
     restart_command: bash /home/hpsomeel/healer_demo_lab/restart_dummy.sh
+
+    # Keep old cleanup_command for backward compatibility,
+    # but new targeted actions will use dedicated commands below.
     cleanup_command: bash /home/hpsomeel/healer_demo_lab/cleanup_demo.sh
+
+    # NEW targeted cleanup commands
+    cleanup_cpu_command: bash /home/hpsomeel/healer_demo_lab/cleanup_cpu_stress.sh
+    cleanup_mem_command: bash /home/hpsomeel/healer_demo_lab/cleanup_mem_stress.sh
+    cleanup_disk_command: bash /home/hpsomeel/healer_demo_lab/cleanup_temp_files.sh
+
     kill_command: bash /home/hpsomeel/healer_demo_lab/kill_dummy.sh
     tmp_dir: /home/hpsomeel/healer_demo_lab/tmp
     demo_base_dir: /home/hpsomeel/healer_demo_lab
@@ -57,7 +66,7 @@ rules:
   - anomaly_type: HIGH_CPU
     actions:
       - send_alert
-      - cleanup_demo
+      - cleanup_cpu_stress
     cooldown_minutes: 10
     enabled: true
 
@@ -84,7 +93,7 @@ rules:
   - anomaly_type: HIGH_RAM
     actions:
       - send_alert
-      - cleanup_demo
+      - cleanup_mem_stress
     cooldown_minutes: 10
     enabled: true
 

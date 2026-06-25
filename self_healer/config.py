@@ -34,7 +34,15 @@ class Target:
     # SSH demo-lab operational fields
     process_name: str = ""
     restart_command: str = ""
+
+    # Backward-compatible generic cleanup
     cleanup_command: str = ""
+
+    # NEW targeted cleanup commands
+    cleanup_cpu_command: str = ""
+    cleanup_mem_command: str = ""
+    cleanup_disk_command: str = ""
+
     kill_command: str = ""
     tmp_dir: str = ""
     demo_base_dir: str = ""
@@ -133,10 +141,18 @@ def load_config(path: Path = _CONFIG_PATH) -> AppConfig:
 
         md = target_data.get("metadata", {})
 
+        # -----------------------------------------------------
         # Backward compatibility for older YAML layouts
+        # -----------------------------------------------------
         target_data.setdefault("process_name", md.get("process_name", ""))
         target_data.setdefault("restart_command", md.get("restart_command", ""))
         target_data.setdefault("cleanup_command", md.get("cleanup_command", ""))
+
+        # NEW targeted cleanup commands
+        target_data.setdefault("cleanup_cpu_command", md.get("cleanup_cpu_command", ""))
+        target_data.setdefault("cleanup_mem_command", md.get("cleanup_mem_command", ""))
+        target_data.setdefault("cleanup_disk_command", md.get("cleanup_disk_command", ""))
+
         target_data.setdefault("kill_command", md.get("kill_command", ""))
         target_data.setdefault("tmp_dir", md.get("tmp_dir", ""))
         target_data.setdefault("demo_base_dir", md.get("demo_base_dir", ""))
