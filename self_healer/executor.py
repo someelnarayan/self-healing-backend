@@ -1,9 +1,10 @@
 from __future__ import annotations
 
+import shlex
 import subprocess
 import time
 from dataclasses import dataclass
-from typing import Callable, Dict, Optional
+from typing import Callable, Dict
 
 import docker
 import httpx
@@ -40,7 +41,7 @@ class Executor:
         except Exception:
             self._docker = None
 
-        self._action_registry: Dict[str, Callable[[Target], ActionResult]] = {
+        self._action_registry: Dict[str, Callable[[Target, str], ActionResult]] = {
             "restart_service": self._restart_service,
             "restart_process": self._restart_process,
             "cleanup_demo": self._cleanup_demo,
@@ -113,6 +114,7 @@ class Executor:
         target: Target,
         anomaly_type: str,
     ) -> ActionResult:
+        # Local Docker service restart (bookshop)
         if target.container_name:
             if self._docker is None:
                 return ActionResult(
@@ -138,8 +140,9 @@ class Executor:
                 message=f"Restarted container {target.container_name}",
             )
 
+        # SSH / shell fallback
         if target.restart_command:
-            return self._run_shell_action(
+            return self._run_target_command(
                 action="restart_service",
                 target=target,
                 anomaly_type=anomaly_type,
@@ -168,7 +171,7 @@ class Executor:
                 message="restart_command not configured",
             )
 
-        return self._run_shell_action(
+        return self._run_target_command(
             action="restart_process",
             target=target,
             anomaly_type=anomaly_type,
@@ -189,7 +192,7 @@ class Executor:
                 message="cleanup_command not configured",
             )
 
-        return self._run_shell_action(
+        return self._run_target_command(
             action="cleanup_demo",
             target=target,
             anomaly_type=anomaly_type,
@@ -201,7 +204,8 @@ class Executor:
         target: Target,
         anomaly_type: str,
     ) -> ActionResult:
-        if not target.cleanup_cpu_command:
+        cleanup_cmd = getattr(target, "cleanup_cpu_command", "")
+        if not cleanup_cmd:
             return ActionResult(
                 action="cleanup_cpu_stress",
                 target_name=target.name,
@@ -210,11 +214,11 @@ class Executor:
                 message="cleanup_cpu_command not configured",
             )
 
-        return self._run_shell_action(
+        return self._run_target_command(
             action="cleanup_cpu_stress",
             target=target,
             anomaly_type=anomaly_type,
-            command=target.cleanup_cpu_command,
+            command=cleanup_cmd,
         )
 
     def _cleanup_mem_stress(
@@ -222,7 +226,8 @@ class Executor:
         target: Target,
         anomaly_type: str,
     ) -> ActionResult:
-        if not target.cleanup_mem_command:
+        cleanup_cmd = getattr(target, "cleanup_mem_command", "")
+        if not cleanup_cmd:
             return ActionResult(
                 action="cleanup_mem_stress",
                 target_name=target.name,
@@ -231,11 +236,11 @@ class Executor:
                 message="cleanup_mem_command not configured",
             )
 
-        return self._run_shell_action(
+        return self._run_target_command(
             action="cleanup_mem_stress",
             target=target,
             anomaly_type=anomaly_type,
-            command=target.cleanup_mem_command,
+            command=cleanup_cmd,
         )
 
     def _cleanup_temp_files(
@@ -243,7 +248,8 @@ class Executor:
         target: Target,
         anomaly_type: str,
     ) -> ActionResult:
-        if not target.cleanup_disk_command:
+        cleanup_cmd = getattr(target, "cleanup_disk_command", "")
+        if not cleanup_cmd:
             return ActionResult(
                 action="cleanup_temp_files",
                 target_name=target.name,
@@ -252,11 +258,11 @@ class Executor:
                 message="cleanup_disk_command not configured",
             )
 
-        return self._run_shell_action(
+        return self._run_target_command(
             action="cleanup_temp_files",
             target=target,
             anomaly_type=anomaly_type,
-            command=target.cleanup_disk_command,
+            command=cleanup_cmd,
         )
 
     def _send_alert(
@@ -311,9 +317,36 @@ class Executor:
             )
 
     # --------------------------------------------------------------
-    # Helpers
+    # Target command execution
     # --------------------------------------------------------------
-    def _run_shell_action(
+    def _run_target_command(
+        self,
+        action: str,
+        target: Target,
+        anomaly_type: str,
+        command: str,
+    ) -> ActionResult:
+        """
+        Execute a command:
+        - locally for local targets
+        - via SSH for ssh targets
+        """
+        if target.is_ssh:
+            return self._run_ssh_command(
+                action=action,
+                target=target,
+                anomaly_type=anomaly_type,
+                remote_command=command,
+            )
+
+        return self._run_local_shell_action(
+            action=action,
+            target=target,
+            anomaly_type=anomaly_type,
+            command=command,
+        )
+
+    def _run_local_shell_action(
         self,
         action: str,
         target: Target,
@@ -367,10 +400,87 @@ class Executor:
                 message=f"Shell action failed: {e}",
             )
 
+    def _run_ssh_command(
+        self,
+        action: str,
+        target: Target,
+        anomaly_type: str,
+        remote_command: str,
+    ) -> ActionResult:
+        """
+        Execute command on SSH target host.
+        """
+        if not target.host or not target.username or not target.ssh_key:
+            return ActionResult(
+                action=action,
+                target_name=target.name,
+                anomaly_type=anomaly_type,
+                success=False,
+                message="SSH target missing host/username/ssh_key",
+            )
+
+        ssh_cmd = [
+            "ssh",
+            "-i",
+            target.ssh_key,
+            "-o",
+            "StrictHostKeyChecking=no",
+            "-o",
+            "UserKnownHostsFile=/dev/null",
+            f"{target.username}@{target.host}",
+            remote_command,
+        ]
+
+        try:
+            completed = subprocess.run(
+                ssh_cmd,
+                capture_output=True,
+                text=True,
+                timeout=90,
+            )
+
+            success = completed.returncode == 0
+            stdout = (completed.stdout or "").strip()
+            stderr = (completed.stderr or "").strip()
+
+            msg_parts = [f"ssh_command={remote_command}"]
+            if stdout:
+                msg_parts.append(f"stdout={stdout}")
+            if stderr:
+                msg_parts.append(f"stderr={stderr}")
+            if not stdout and not stderr:
+                msg_parts.append(f"returncode={completed.returncode}")
+
+            return ActionResult(
+                action=action,
+                target_name=target.name,
+                anomaly_type=anomaly_type,
+                success=success,
+                message=" | ".join(msg_parts),
+            )
+
+        except subprocess.TimeoutExpired:
+            return ActionResult(
+                action=action,
+                target_name=target.name,
+                anomaly_type=anomaly_type,
+                success=False,
+                message=f"SSH command timed out: {remote_command}",
+            )
+
+        except Exception as e:
+            return ActionResult(
+                action=action,
+                target_name=target.name,
+                anomaly_type=anomaly_type,
+                success=False,
+                message=f"SSH action failed: {e}",
+            )
+
+    # --------------------------------------------------------------
+    # Audit
+    # --------------------------------------------------------------
     def _write_audit(self, result: ActionResult) -> None:
-        """
-        Persist action result into KnowledgeBase audit log.
-        """
         try:
             self.kb.write_audit(
                 target_name=result.target_name,
